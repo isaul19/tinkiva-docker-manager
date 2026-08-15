@@ -92,7 +92,8 @@ El deployment global es exclusivo:
 1. Verifica rama. Si no se indica ninguna se usa la configurada, salvo en webhooks, donde
    el emisor debe declararla.
 2. En proyectos de repositorio, sincroniza el clon con `fetch --depth 1` + `reset --hard` y
-   toma el commit resultante.
+   toma el commit resultante. Si el proyecto usa detección automática, restaura el
+   `.tinkiva.Dockerfile` generado dentro del contexto antes del build.
 3. Obtiene imagen anterior.
 4. Actualiza `image_env` de forma atómica.
 5. Ejecuta `docker compose pull --quiet` y `docker compose up -d --remove-orphans`; en los
@@ -106,9 +107,9 @@ La respuesta HTTP es síncrona. GitHub Actions recibe el resultado real del depl
 ## Polling y webhook propio
 
 Un único watcher secuencial consulta GitHub y los registries en el intervalo configurado.
-Para repositorios compara el SHA remoto con el `HEAD` local. Para imágenes ejecuta un pull,
-compara el ID inmutable local antes y después y aplica Compose solo si cambió. No hay webhook
-de GitHub ni puerto público obligatorio.
+Para repositorios compara el SHA remoto con la última revisión desplegada. Para imágenes
+ejecuta un pull y compara el digest con la última revisión aplicada. No hay webhook de
+GitHub ni puerto público obligatorio.
 
 Se conserva `/hooks/deploy/:slug` como integración opcional, con un token por proyecto
 comparado en tiempo constante.

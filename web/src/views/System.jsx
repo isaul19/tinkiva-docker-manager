@@ -35,8 +35,8 @@ export function System() {
   usePolling(metrics.reload, 15_000);
 
   const tools = [
-    ['docker', info?.docker?.available, info?.docker?.server_version],
-    ['compose', Boolean(info?.docker?.compose_version), info?.docker?.compose_version],
+    ['docker', info?.docker?.available, info?.docker?.server_version || info?.docker?.error],
+    ['compose', Boolean(info?.docker?.compose_version), info?.docker?.compose_version || info?.docker?.compose_error],
     ['curl', capabilities.curl, 'Docker Hub y GitHub'],
     ['openssl', capabilities.openssl, 'Firma de JWT de GitHub App'],
     ['git', capabilities.git, 'Clonado de repositorios'],
@@ -130,7 +130,6 @@ export function System() {
             </li>
           ))}
         </ul>
-        {info?.docker?.error ? <p class="muted small">{info.docker.error}</p> : null}
       </Panel>
     </>
   );

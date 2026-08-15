@@ -13,7 +13,7 @@ use crate::util::{
     read_env_value, remove_env_key, set_env_value, valid_container_ref, valid_db_identifier,
     valid_display_name, valid_env_key, valid_image_ref, valid_slug,
 };
-use crate::{net, registry};
+use crate::{buildpack, net, registry};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -497,6 +497,9 @@ impl App {
     }
 
     fn create_project(&self, request: &Request) -> Response {
+        if let Err(error) = self.require_docker_compose() {
+            return json_error(503, &error);
+        }
         let fields = match request.form() {
             Ok(fields) => fields,
             Err(error) => return json_error(400, &error),
@@ -756,7 +759,35 @@ impl App {
                 ),
             ));
         }
+        self.restore_generated_dockerfile(project)?;
         Ok(self.git.head_commit(&directory))
+    }
+
+    fn restore_generated_dockerfile(&self, project: &Project) -> Result<(), ApiError> {
+        let Some(directory) = project.directory() else {
+            return Ok(());
+        };
+        let blueprint = directory.join(buildpack::BLUEPRINT_FILE);
+        if !blueprint.is_file() {
+            return Ok(());
+        }
+        let context = fs::read_to_string(directory.join(buildpack::CONTEXT_FILE))
+            .map_err(|error| ApiError::new(500, format!("no se pudo leer el contexto generado: {error}")))?;
+        let context = context.trim();
+        if !valid_relative_path(context) {
+            return Err(ApiError::new(500, "el contexto generado guardado es inválido"));
+        }
+        let repository = directory.join("repo").canonicalize()
+            .map_err(|error| ApiError::new(500, format!("no se pudo resolver el clon: {error}")))?;
+        let target = repository.join(context.trim_matches('/')).canonicalize()
+            .map_err(|error| ApiError::new(500, format!("no se pudo resolver el contexto: {error}")))?;
+        if !target.starts_with(&repository) || !target.is_dir() {
+            return Err(ApiError::new(500, "el contexto generado sale del repositorio"));
+        }
+        let contents = fs::read(&blueprint)
+            .map_err(|error| ApiError::new(500, format!("no se pudo leer el Dockerfile generado: {error}")))?;
+        atomic_write(&target.join(buildpack::GENERATED_DOCKERFILE), &contents, 0o640)
+            .map_err(|error| ApiError::new(500, format!("no se pudo restaurar el Dockerfile generado: {error}")))
     }
 
     fn perform_deploy(
@@ -1146,6 +1177,9 @@ impl App {
     // ── Alta de recursos ───────────────────────────────────────────────────
 
     fn create_database(&self, request: &Request, forced_engine: Option<&str>) -> Response {
+        if let Err(error) = self.require_docker_compose() {
+            return json_error(503, &error);
+        }
         let fields = match request.form() {
             Ok(fields) => fields,
             Err(error) => return json_error(400, &error),
@@ -1245,6 +1279,9 @@ impl App {
     }
 
     fn create_image_service(&self, request: &Request) -> Response {
+        if let Err(error) = self.require_docker_compose() {
+            return json_error(503, &error);
+        }
         let fields = match request.form() {
             Ok(fields) => fields,
             Err(error) => return json_error(400, &error),
@@ -1324,6 +1361,9 @@ impl App {
     }
 
     fn create_repository_service(&self, request: &Request) -> Response {
+        if let Err(error) = self.require_docker_compose() {
+            return json_error(503, &error);
+        }
         if !self.capabilities.git {
             return json_error(503, "git no está instalado en el servidor");
         }
@@ -1353,12 +1393,16 @@ impl App {
         };
 
         let dockerfile = optional_field(&fields, "dockerfile").unwrap_or("Dockerfile");
+        let build_mode = optional_field(&fields, "build_mode").unwrap_or("auto");
+        if !matches!(build_mode, "auto" | "dockerfile") {
+            return json_error(422, "modo de build inválido");
+        }
         let build_context = optional_field(&fields, "build_context").unwrap_or(".");
         if !valid_relative_path(dockerfile) || !valid_relative_path(build_context) {
             return json_error(422, "ruta de Dockerfile o contexto inválida");
         }
 
-        let container_port = match parse_port(&fields, "container_port") {
+        let mut container_port = match parse_port(&fields, "container_port") {
             Ok(port) => port,
             Err(error) => return json_error(422, &error),
         };
@@ -1366,9 +1410,6 @@ impl App {
             Ok(port) => port,
             Err(error) => return json_error(422, &error),
         };
-        if published_port.is_some() && container_port.is_none() {
-            return json_error(422, "indica también el puerto interno del contenedor");
-        }
         let memory_mb = optional_field(&fields, "memory_mb")
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(512)
@@ -1409,23 +1450,64 @@ impl App {
             }
         }
 
-        let dockerfile_path = directory
-            .join("repo")
-            .join(build_context.trim_matches('/'))
-            .join(dockerfile);
-        if !dockerfile_path.is_file() {
+        let repository_root = match directory.join("repo").canonicalize() {
+            Ok(path) => path,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&directory);
+                return json_error(500, &format!("no se pudo resolver el clon: {error}"));
+            }
+        };
+        let context = match repository_root.join(build_context.trim_matches('/')).canonicalize() {
+            Ok(path) if path.is_dir() && path.starts_with(&repository_root) => path,
+            _ => {
+                let _ = fs::remove_dir_all(&directory);
+                return json_error(422, "el contexto de build no existe o sale del repositorio");
+            }
+        };
+
+        let plan = if build_mode == "dockerfile" {
+            if !context.join(dockerfile).is_file() {
+                let _ = fs::remove_dir_all(&directory);
+                return json_error(422, &format!("el repositorio no contiene {build_context}/{dockerfile}"));
+            }
+            buildpack::BuildPlan {
+                dockerfile_name: dockerfile.to_owned(),
+                dockerfile: None,
+                runtime: "docker",
+                default_port: None,
+            }
+        } else {
+            match buildpack::detect(&context, dockerfile) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    let _ = fs::remove_dir_all(&directory);
+                    return json_error(422, &format!("no se pudo detectar la aplicación: {error}"));
+                }
+            }
+        };
+
+        if container_port.is_none() {
+            container_port = plan.default_port;
+        }
+        if published_port.is_some() && container_port.is_none() {
             let _ = fs::remove_dir_all(&directory);
-            return json_error(
-                422,
-                &format!("el repositorio no contiene {build_context}/{dockerfile}"),
-            );
+            return json_error(422, "indica el puerto interno para publicar el servicio");
+        }
+        if let Some(contents) = &plan.dockerfile {
+            if let Err(error) = atomic_write(&directory.join(buildpack::BLUEPRINT_FILE), contents.as_bytes(), 0o640)
+                .and_then(|_| atomic_write(&directory.join(buildpack::CONTEXT_FILE), build_context.as_bytes(), 0o640))
+                .and_then(|_| atomic_write(&context.join(buildpack::GENERATED_DOCKERFILE), contents.as_bytes(), 0o640))
+            {
+                let _ = fs::remove_dir_all(&directory);
+                return json_error(500, &format!("no se pudo guardar el Dockerfile generado: {error}"));
+            }
         }
 
         let generated = templates::repository(&templates::RepositoryRequest {
             slug,
             repository,
             branch,
-            dockerfile,
+            dockerfile: &plan.dockerfile_name,
             build_context,
             container_port,
             published_port,
@@ -1439,7 +1521,7 @@ impl App {
                 slug: slug.to_owned(),
                 name: name.trim().to_owned(),
                 kind: KIND_REPOSITORY,
-                engine: None,
+                engine: Some(plan.runtime.to_owned()),
                 repository: Some(repository.to_owned()),
                 installation_id: Some(installation_id),
                 branch: Some(branch.to_owned()),
@@ -1587,6 +1669,19 @@ impl App {
             self.config.allowed_root.join(path)
         };
         canonical_existing_within(&self.config.allowed_root, &candidate)
+    }
+
+    fn require_docker_compose(&self) -> Result<(), String> {
+        let info = self.docker.info();
+        if !info.available {
+            return Err(info.error.unwrap_or_else(|| "Docker no está disponible".to_owned()));
+        }
+        if info.compose_version.is_none() {
+            return Err(info
+                .compose_error
+                .unwrap_or_else(|| "Docker Compose no está instalado".to_owned()));
+        }
+        Ok(())
     }
 }
 

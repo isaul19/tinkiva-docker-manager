@@ -20,6 +20,7 @@ export function RepositoryForm({ onCreated }) {
     name: '',
     slug: '',
     branch: 'main',
+    build_mode: 'auto',
     dockerfile: 'Dockerfile',
     build_context: '.',
     container_port: '',
@@ -211,14 +212,27 @@ export function RepositoryForm({ onCreated }) {
           <Input type="number" min="64" max="16384" value={form.memory_mb} onInput={update('memory_mb')} />
         </Field>
 
-        <Field label="Contexto de build" hint="Carpeta dentro del repo. Usa «.» para la raíz.">
+        <Field label="Tipo de aplicación" hint="Auto detecta Dockerfile, Node, Python o un sitio estático.">
+          <Select
+            value={form.build_mode}
+            onChange={update('build_mode')}
+            options={[
+              { value: 'auto', label: 'Detectar automáticamente' },
+              { value: 'dockerfile', label: 'Usar Dockerfile del repositorio' },
+            ]}
+          />
+        </Field>
+        <Field label="Contexto de build" hint="Carpeta de la app dentro del repo; «.» usa la raíz.">
           <Input value={form.build_context} onInput={update('build_context')} required />
         </Field>
-        <Field label="Dockerfile" hint="Relativo al contexto.">
-          <Input value={form.dockerfile} onInput={update('dockerfile')} required />
-        </Field>
 
-        <Field label="Puerto del contenedor">
+        {form.build_mode === 'dockerfile' ? (
+          <Field label="Dockerfile" hint="Relativo al contexto.">
+            <Input value={form.dockerfile} onInput={update('dockerfile')} required />
+          </Field>
+        ) : null}
+
+        <Field label="Puerto del contenedor" hint="Vacío = 80 para frontend, 3000 para Node y 8000 para Python.">
           <Input
             type="number"
             min="1"

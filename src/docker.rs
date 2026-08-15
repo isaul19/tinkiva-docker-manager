@@ -19,6 +19,7 @@ pub struct DockerInfo {
     pub server_version: Option<String>,
     pub compose_version: Option<String>,
     pub error: Option<String>,
+    pub compose_error: Option<String>,
 }
 
 impl DockerInfo {
@@ -29,13 +30,15 @@ impl DockerInfo {
                 "\"available\":{},",
                 "\"server_version\":{},",
                 "\"compose_version\":{},",
-                "\"error\":{}",
+                "\"error\":{},",
+                "\"compose_error\":{}",
                 "}}"
             ),
             self.available,
             self.server_version.as_deref().map_or_else(|| "null".to_owned(), json_string),
             self.compose_version.as_deref().map_or_else(|| "null".to_owned(), json_string),
-            self.error.as_deref().map_or_else(|| "null".to_owned(), json_string)
+            self.error.as_deref().map_or_else(|| "null".to_owned(), json_string),
+            self.compose_error.as_deref().map_or_else(|| "null".to_owned(), json_string)
         )
     }
 }
@@ -116,6 +119,7 @@ impl DockerClient {
                 server_version: None,
                 compose_version: None,
                 error: Some("no se pudo ejecutar Docker".to_owned()),
+                compose_error: None,
             };
         };
 
@@ -125,21 +129,23 @@ impl DockerClient {
                 server_version: None,
                 compose_version: None,
                 error: Some(server.summary()),
+                compose_error: None,
             };
         }
 
-        let compose = self.run(["compose", "version", "--short"], None, Duration::from_secs(10));
+        let compose = self.run(["compose", "version"], None, Duration::from_secs(10));
         let (compose_version, compose_error) = match compose {
             Ok(result) if result.success => (Some(result.stdout.trim().to_owned()), None),
-            Ok(result) => (None, Some(result.summary())),
+            Ok(result) => (None, Some(compose_error_message(&result.summary()))),
             Err(error) => (None, Some(error)),
         };
 
         DockerInfo {
-            available: compose_version.is_some(),
+            available: true,
             server_version: Some(server.stdout.trim().to_owned()),
             compose_version,
-            error: compose_error,
+            error: None,
+            compose_error,
         }
     }
 
@@ -452,6 +458,14 @@ impl DockerClient {
             &[("DOCKER_CLI_HINTS", "false"), ("COMPOSE_ANSI", "never")],
             timeout
         )
+    }
+}
+
+fn compose_error_message(error: &str) -> String {
+    if error.contains("not a docker command") || error.contains("unknown flag") {
+        "Docker Compose no está instalado".to_owned()
+    } else {
+        truncate_text(error, 500)
     }
 }
 

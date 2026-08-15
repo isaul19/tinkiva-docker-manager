@@ -28,7 +28,7 @@ const TYPES = [
   {
     id: 'repository',
     title: 'Repositorio de GitHub',
-    description: 'Clona, construye la imagen y redespliega en cada push.',
+    description: 'Dockerfile, Node, Python o frontend estático con detección automática.',
     icon: <BrandIcon slug="github" size={24} color="#f4f6f8" />,
     form: RepositoryForm,
   },
@@ -57,6 +57,8 @@ export function AddResource({ open, onClose, onCreated }) {
   const Form = selected?.form;
 
   const disabledReason = (id) => {
+    if (!info?.docker?.available) return 'Docker no está accesible para Tinkiva';
+    if (!info?.docker?.compose_version) return 'Requiere Docker Compose';
     if (id === 'image' && !capabilities.curl) return 'Requiere curl en el servidor';
     if (id === 'repository' && !capabilities.git) return 'Requiere git en el servidor';
     if (id === 'repository' && !info?.github_connected) return 'Conecta GitHub primero';

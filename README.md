@@ -397,9 +397,18 @@ sección **GitHub** del panel:
 3. Pulsa **Instalar en repositorios** y elige todos o solo algunos.
 
 A partir de ahí, crear un recurso desde un repositorio clona la rama elegida en
-`<slug>/repo`, genera un Compose con `build:` y construye la imagen en el servidor. Cada
-el watcher compara periódicamente el SHA de la rama con el `HEAD` local y redespliega solo
-cuando cambia.
+`<slug>/repo`, genera un Compose con `build:` y construye la imagen en el servidor. Si hay
+un `Dockerfile`, lo utiliza. En caso contrario puede generar una receta interna para:
+
+- Node.js con npm, pnpm o Yarn.
+- Frontends Vite o Create React App, compilados y servidos por Nginx con fallback SPA.
+- Python con FastAPI, Flask, Django o un `main.py`/`app.py` convencional.
+- Sitios estáticos que tengan `index.html`.
+
+En monorepos se puede indicar la carpeta de la aplicación como contexto. El Dockerfile
+generado se guarda fuera del clon y se restaura después de cada sincronización, sin modificar
+el repositorio remoto. El watcher compara periódicamente el SHA remoto con el último commit
+desplegado y solo construye cuando cambia.
 
 ### Si entras por un túnel SSH o localhost
 
