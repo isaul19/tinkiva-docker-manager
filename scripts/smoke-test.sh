@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-BINARY=${1:-target/release/tinkiva-docker-manager}
+BINARY=${1:-target/release/tinkivadm}
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BINARY=$(realpath "$BINARY")
 TMP=$(mktemp -d)

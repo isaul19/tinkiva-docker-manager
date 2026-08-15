@@ -39,7 +39,7 @@ fn main() {
         None => run(),
     };
     if let Err(error) = outcome {
-        eprintln!("tinkiva-docker-manager: {error}");
+        eprintln!("tinkivadm: {error}");
         std::process::exit(1);
     }
 }

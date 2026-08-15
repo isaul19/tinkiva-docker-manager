@@ -77,7 +77,7 @@ cd tinkiva-docker-manager
 El binario quedará en:
 
 ```text
-target/release/tinkiva-docker-manager
+target/release/tinkivadm
 ```
 
 El perfil release prioriza tamaño: `opt-level = "z"`, LTO completo, un codegen unit, símbolos removidos y `panic = "abort"`. El estado de las comprobaciones realizadas al generar el paquete está documentado en [`VALIDATION.md`](VALIDATION.md).
@@ -104,7 +104,7 @@ El repositorio incluye un Docker CLI simulado y un smoke test del ciclo completo
 
 ```bash
 cargo build --release
-./scripts/smoke-test.sh target/release/tinkiva-docker-manager
+./scripts/smoke-test.sh target/release/tinkivadm
 ```
 
 Valida:
@@ -121,13 +121,13 @@ Valida:
 ## Instalar con systemd
 
 ```bash
-sudo ./scripts/install.sh target/release/tinkiva-docker-manager
+sudo ./scripts/install.sh target/release/tinkivadm
 ```
 
 El script crea:
 
 ```text
-/usr/local/bin/tinkiva-docker-manager
+/usr/local/bin/tinkivadm
 /etc/tinkiva-docker-manager/env
 /etc/systemd/system/tinkiva-docker-manager.service
 /var/lib/tinkiva-docker-manager/
@@ -396,8 +396,8 @@ Consulta también [SECURITY.md](SECURITY.md).
 El binario incluye un actualizador que descarga la última release de GitHub, verifica su suma sha256 y se reemplaza a sí mismo (requiere `curl` y `sha256sum`):
 
 ```bash
-sudo /usr/local/bin/tinkiva-docker-manager update        # última versión
-sudo /usr/local/bin/tinkiva-docker-manager update v0.1.2 # versión concreta
+sudo /usr/local/bin/tinkivadm update        # última versión
+sudo /usr/local/bin/tinkivadm update v0.1.2 # versión concreta
 sudo systemctl restart tinkiva-docker-manager
 ```
 

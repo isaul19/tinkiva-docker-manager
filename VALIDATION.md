@@ -21,14 +21,14 @@ El entorno aislado donde se generó este ZIP no incluye `rustc`/`cargo` y no per
 cargo clippy --all-targets
 cargo test
 cargo build --release
-./scripts/smoke-test.sh target/release/tinkiva-docker-manager
+./scripts/smoke-test.sh target/release/tinkivadm
 ```
 
 Puedes ejecutar todo localmente con:
 
 ```bash
 ./scripts/build-release.sh
-./scripts/smoke-test.sh target/release/tinkiva-docker-manager
+./scripts/smoke-test.sh target/release/tinkivadm
 ```
 
 Al subir el proyecto a GitHub, `.github/workflows/ci.yml` ejecutará esas mismas comprobaciones con Rust 1.97.1.

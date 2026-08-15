@@ -7,7 +7,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-BINARY=${1:-"$ROOT/target/release/tinkiva-docker-manager"}
+BINARY=${1:-"$ROOT/target/release/tinkivadm"}
 BIND=${TDM_INSTALL_BIND:-127.0.0.1:8787}
 USER_NAME=tinkiva-docker
 
@@ -29,7 +29,7 @@ install -d -m 0700 -o "$USER_NAME" -g "$USER_NAME" /var/lib/tinkiva-docker-manag
 install -d -m 0750 -o "$USER_NAME" -g docker /opt/tinkiva/apps
 install -d -m 0750 -o root -g root /etc/tinkiva-docker-manager
 install -d -m 0755 -o root -g root /usr/local/share/doc/tinkiva-docker-manager
-install -m 0755 -o root -g root "$BINARY" /usr/local/bin/tinkiva-docker-manager
+install -m 0755 -o root -g root "$BINARY" /usr/local/bin/tinkivadm
 install -m 0644 -o root -g root "$ROOT/deploy/tinkiva-docker-manager.service" /etc/systemd/system/tinkiva-docker-manager.service
 install -m 0644 -o root -g root "$ROOT/README.md" /usr/local/share/doc/tinkiva-docker-manager/README.md
 

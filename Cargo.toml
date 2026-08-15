@@ -7,6 +7,10 @@ description = "Panel de despliegue Docker ultraligero y de un solo nodo"
 license = "MIT"
 authors = ["Tinkiva"]
 
+[[bin]]
+name = "tinkivadm"
+path = "src/main.rs"
+
 # Intencionalmente sin dependencias externas: menor RAM, binario pequeño y build reproducible.
 [dependencies]
 
