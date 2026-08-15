@@ -391,6 +391,20 @@ El usuario del servicio pertenece al grupo `docker`. En Linux, controlar Docker 
 
 Consulta también [SECURITY.md](SECURITY.md).
 
+## Actualizar
+
+El binario incluye un actualizador que descarga la última release de GitHub, verifica su suma sha256 y se reemplaza a sí mismo (requiere `curl` y `sha256sum`):
+
+```bash
+sudo /usr/local/bin/tinkiva-docker-manager update        # última versión
+sudo /usr/local/bin/tinkiva-docker-manager update v0.1.2 # versión concreta
+sudo systemctl restart tinkiva-docker-manager
+```
+
+El repositorio de origen se puede cambiar con `TDM_UPDATE_REPO` (predeterminado: `isaul19/tinkiva-docker-manager`). Otros comandos: `config` reejecuta el asistente y `version` imprime la versión actual.
+
+Cuando el binario se ejecuta de forma interactiva y ya existe configuración (`tinkiva.env` o `/etc/tinkiva-docker-manager/env`), ofrece un menú: iniciar / volver a configurar / actualizar / salir. El servicio systemd no se ve afectado porque no usa terminal y recibe las variables por `EnvironmentFile`.
+
 ## Desinstalar
 
 Conservar configuración e historial:

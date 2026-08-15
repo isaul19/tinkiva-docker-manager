@@ -39,10 +39,7 @@ impl Config {
         let file_settings = if env::var("TDM_ADMIN_TOKEN").is_ok() {
             HashMap::new()
         } else {
-            match crate::setup::read_config_file() {
-                Some(settings) => settings,
-                None => crate::setup::run_wizard()?,
-            }
+            crate::setup::read_config_file().unwrap_or_default()
         };
         let setting = |key: &str| {
             env::var(key)

@@ -19,14 +19,29 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
 fn main() {
-    if let Err(error) = run() {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let outcome = match arguments.first().map(String::as_str) {
+        Some("update") => setup::run_self_update(arguments.get(1).map(String::as_str)),
+        Some("config") => {
+            setup::run_wizard(setup::read_config_file().as_ref())
+        }
+        Some("version") | Some("--version") | Some("-V") => {
+            println!("tinkiva-docker-manager {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Some(other) => Err(format!(
+            "comando desconocido: {other}. Comandos: update [versión], config, version."
+        )),
+        None => run(),
+    };
+    if let Err(error) = outcome {
         eprintln!("tinkiva-docker-manager: {error}");
         std::process::exit(1);
     }
 }
 
 fn run() -> Result<(), String> {
-    let config = Config::load()?;
+    let config = resolve_config()?;
     let bind = config.bind.clone();
     let workers = config.workers;
     let app = Arc::new(App::new(config)?);
@@ -66,6 +81,40 @@ fn run() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn resolve_config() -> Result<Config, String> {
+    if std::env::var("TDM_ADMIN_TOKEN").is_ok() {
+        return Config::load();
+    }
+
+    let interactive = setup::stdin_is_interactive();
+    if !setup::config_exists() {
+        if !interactive {
+            return Err(
+                "TDM_ADMIN_TOKEN es obligatorio. Ejecuta el binario en una terminal para el asistente inicial."
+                    .to_owned(),
+            );
+        }
+        setup::run_wizard(None)?;
+        return Config::load();
+    }
+
+    if interactive {
+        match setup::show_menu()? {
+            setup::MenuChoice::Start => {}
+            setup::MenuChoice::Reconfigure => {
+                let current = setup::read_config_file();
+                setup::run_wizard(current.as_ref())?;
+            }
+            setup::MenuChoice::Update => {
+                setup::run_self_update(None)?;
+                std::process::exit(0);
+            }
+            setup::MenuChoice::Exit => std::process::exit(0),
+        }
+    }
+    Config::load()
 }
 
 fn worker_loop(app: Arc<App>, receiver: Arc<Mutex<mpsc::Receiver<TcpStream>>>) {
