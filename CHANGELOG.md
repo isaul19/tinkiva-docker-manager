@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.0 — 2026-08-15
+
+### Rollback para recursos de repositorio
+
+- Los builds de repositorio etiquetan la imagen por commit (`tinkiva/<slug>:<sha>`) a
+  través de `APP_IMAGE`: cada versión queda preservada en el Docker local, igual que en
+  los recursos de imagen.
+- El rollback restaura la versión anterior y aplica `compose up -d` **sin reconstruir**,
+  así que es inmediato.
+- Los recursos de repositorio existentes migran solos en su próximo despliegue: el
+  Compose pasa a resolver la imagen desde `APP_IMAGE` y el rollback queda habilitado.
+- La restauración automática tras un despliegue fallido tampoco reconstruye.
+
+### Interfaz
+
+- Tarjetas de recurso más anchas y nueva fila «Último despliegue» bajo «Creado», con
+  indicación en rojo cuando el último despliegue falló.
+
 ## 0.5.0 — 2026-08-15
 
 ### Estado en vivo de los recursos
