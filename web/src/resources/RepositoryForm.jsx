@@ -118,7 +118,7 @@ export function RepositoryForm({ onCreated }) {
           {(list) => (
             <>
               {list.length > 1 ? (
-                <Field label="Cuenta">
+                <Field label="Cuenta" hint="Cuenta de GitHub donde está instalado el acceso de Tinkiva.">
                   <Select
                     value={String(installationId ?? '')}
                     onChange={(event) => {
@@ -133,16 +133,18 @@ export function RepositoryForm({ onCreated }) {
                 </Field>
               ) : null}
 
-              <div class="input-with-icon">
-                <Search size={16} />
-                <input
-                  class="input"
-                  type="search"
-                  placeholder="Filtrar repositorios"
-                  value={filter}
-                  onInput={(event) => setFilter(event.currentTarget.value)}
-                />
-              </div>
+              <Field label="Buscar repositorio" hint="Escribe parte del propietario o nombre del repositorio.">
+                <div class="input-with-icon">
+                  <Search size={16} />
+                  <input
+                    class="input"
+                    type="search"
+                    placeholder="Filtrar repositorios"
+                    value={filter}
+                    onInput={(event) => setFilter(event.currentTarget.value)}
+                  />
+                </div>
+              </Field>
 
               {repositories.loading ? <Spinner label="Leyendo repositorios…" /> : null}
               {repositories.error ? (
@@ -192,7 +194,7 @@ export function RepositoryForm({ onCreated }) {
       </div>
 
       <FormGrid>
-        <Field label="Nombre">
+        <Field label="Nombre" hint="Nombre visible del recurso en el panel.">
           <Input value={form.name} onInput={onName} required maxLength={100} />
         </Field>
         <Field label="Slug" hint="Se genera desde el nombre; puedes editarlo si lo necesitas.">
@@ -218,7 +220,7 @@ export function RepositoryForm({ onCreated }) {
             <Input value={form.branch} onInput={update('branch')} required />
           )}
         </Field>
-        <Field label="RAM máxima (MB)">
+        <Field label="RAM máxima (MB)" hint="Entre 64 y 16384 MB para el contenedor.">
           <Input type="number" min="64" max="16384" value={form.memory_mb} onInput={update('memory_mb')} />
         </Field>
 
@@ -304,7 +306,10 @@ export function RepositoryForm({ onCreated }) {
             setForm((current) => ({ ...current, auto_deploy: event.currentTarget.checked }))
           }
         />
-        Auto Deploy por polling de GitHub
+        <span>
+          Auto Deploy por polling de GitHub
+          <span class="field-hint">Revisa la rama elegida y redespliega cuando detecta un commit nuevo.</span>
+        </span>
       </label>
 
       <div class="form-actions">

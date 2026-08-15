@@ -307,6 +307,10 @@ impl App {
             ("POST", ["api", "projects"]) => self.create_project(request),
             ("DELETE", ["api", "projects", slug]) => self.delete_project(slug, request),
             ("GET", ["api", "projects", slug, "logs"]) => self.project_logs(slug, request),
+            ("GET", ["api", "projects", slug, "compose"]) => self.project_compose(slug),
+            ("POST", ["api", "projects", slug, "compose"]) => {
+                self.update_project_compose(slug, request)
+            }
             ("GET", ["api", "projects", slug, "environment"]) => self.project_environment(slug),
             ("POST", ["api", "projects", slug, "environment"]) => self.update_project_environment(slug, request),
             ("POST", ["api", "projects", slug, "deploy"]) => {
@@ -331,6 +335,7 @@ impl App {
             ("POST", ["api", "resources", "database"]) => self.create_database(request, None),
             ("POST", ["api", "resources", "image"]) => self.create_image_service(request),
             ("POST", ["api", "resources", "repository"]) => self.create_repository_service(request),
+            ("POST", ["api", "resources", "compose"]) => self.create_compose_text_resource(request),
             // Ruta histórica: equivale a crear una base de datos PostgreSQL.
             ("POST", ["api", "templates", "postgres"]) => {
                 self.create_database(request, Some("postgres"))
@@ -704,6 +709,56 @@ impl App {
             Ok(logs) => Response::text(200, logs),
             Err(error) => json_error(502, &error),
         }
+    }
+
+    /// Devuelve el Compose como texto editable para recursos Compose. Los recursos
+    /// generados por los asistentes tienen configuración adicional que no debe
+    /// editarse a ciegas desde este editor.
+    fn project_compose(&self, slug: &str) -> Response {
+        let project = match self.editable_compose_project(slug) {
+            Ok(project) => project,
+            Err(response) => return response,
+        };
+        match fs::read_to_string(&project.compose_file) {
+            Ok(compose) => Response::json(200, format!("{{\"compose\":{}}}", json_string(&compose))),
+            Err(error) => json_error(500, &format!("no se pudo leer compose.yaml: {error}")),
+        }
+    }
+
+    /// Guarda el YAML de un recurso Compose después de validarlo con Docker.
+    /// No despliega automáticamente: el usuario puede revisar y usar
+    /// «Desplegar» cuando esté listo.
+    fn update_project_compose(&self, slug: &str, request: &Request) -> Response {
+        if let Err(error) = self.require_docker_compose() {
+            return json_error(503, &error);
+        }
+        let project = match self.editable_compose_project(slug) {
+            Ok(project) => project,
+            Err(response) => return response,
+        };
+        let fields = match request.form() {
+            Ok(fields) => fields,
+            Err(error) => return json_error(400, &error),
+        };
+        let compose = fields.get("compose").map_or("", String::as_str);
+        if let Err(error) = validate_compose_text(compose) {
+            return json_error(422, &error);
+        }
+        let original = match fs::read_to_string(&project.compose_file) {
+            Ok(contents) => contents,
+            Err(error) => return json_error(500, &format!("no se pudo leer compose.yaml: {error}")),
+        };
+        if compose == original {
+            return Response::json(200, "{\"ok\":true,\"changed\":false,\"message\":\"No había cambios que guardar.\"}".to_owned());
+        }
+        if let Err(error) = atomic_write(&project.compose_file, compose.as_bytes(), 0o640) {
+            return json_error(500, &format!("no se pudo actualizar compose.yaml: {error}"));
+        }
+        if let Err(error) = self.docker.validate_compose(&project.compose_file) {
+            let _ = atomic_write(&project.compose_file, original.as_bytes(), 0o640);
+            return json_error(422, &format!("Compose inválido: {error}"));
+        }
+        Response::json(200, "{\"ok\":true,\"changed\":true,\"message\":\"Compose guardado. Despliega el recurso para aplicar los cambios.\"}".to_owned())
     }
 
     fn project_environment(&self, slug: &str) -> Response {
@@ -1859,6 +1914,53 @@ impl App {
         )
     }
 
+    /// Crea un recurso Compose a partir de YAML pegado en la interfaz.
+    fn create_compose_text_resource(&self, request: &Request) -> Response {
+        if let Err(error) = self.require_docker_compose() {
+            return json_error(503, &error);
+        }
+        let fields = match request.form() {
+            Ok(fields) => fields,
+            Err(error) => return json_error(400, &error),
+        };
+        let slug = field(&fields, "slug");
+        let name = field(&fields, "name");
+        let compose = fields.get("compose").map_or("", String::as_str);
+        if !valid_slug(slug) {
+            return json_error(422, "slug inválido; usa minúsculas, números y guiones");
+        }
+        if !valid_display_name(name) {
+            return json_error(422, "nombre inválido");
+        }
+        if let Err(error) = validate_compose_text(compose) {
+            return json_error(422, &error);
+        }
+        let directory = match self.prepare_directory(slug) {
+            Ok(directory) => directory,
+            Err(error) => return json_error(error.status, &error.message),
+        };
+        let compose_file = directory.join("compose.yaml");
+        let abort = |message: String, status: u16| {
+            let _ = fs::remove_dir_all(&directory);
+            json_error(status, &message)
+        };
+        if let Err(error) = atomic_write(&compose_file, compose.as_bytes(), 0o640) {
+            return abort(format!("no se pudo escribir Compose: {error}"), 500);
+        }
+        if let Err(error) = self.docker.validate_compose(&compose_file) {
+            return abort(format!("Compose inválido: {error}"), 422);
+        }
+        let webhook_token = match random_hex(24) {
+            Ok(token) => token,
+            Err(error) => return abort(format!("no se pudo crear token: {error}"), 500),
+        };
+        let project = Project::compose(slug.to_owned(), name.trim().to_owned(), compose_file, webhook_token, now_unix());
+        match self.store.add_project(project.clone()) {
+            Ok(()) => Response::json(201, project.to_json(true)),
+            Err(error) => abort(error, 409),
+        }
+    }
+
     /// Crea `<allowed_root>/<slug>` con permisos restringidos.
     fn prepare_directory(&self, slug: &str) -> Result<PathBuf, ApiError> {
         let directory = self.config.allowed_root.join(slug);
@@ -2000,6 +2102,29 @@ impl App {
         canonical_existing_within(&self.config.allowed_root, &candidate)
     }
 
+    fn editable_compose_project(&self, slug: &str) -> Result<Project, Response> {
+        if !valid_slug(slug) {
+            return Err(json_error(400, "slug inválido"));
+        }
+        let project = match self.store.project(slug) {
+            Ok(Some(project)) => project,
+            Ok(None) => return Err(json_error(404, "proyecto no encontrado")),
+            Err(error) => return Err(json_error(500, &error)),
+        };
+        if project.kind != crate::model::KIND_COMPOSE {
+            return Err(json_error(409, "solo los recursos Compose se editan como texto"));
+        }
+        match canonical_existing_within(&self.config.allowed_root, &project.compose_file) {
+            Ok(path) if path.is_file() => {
+                let mut project = project;
+                project.compose_file = path;
+                Ok(project)
+            }
+            Ok(_) => Err(json_error(409, "el archivo Compose del recurso ya no existe")),
+            Err(error) => Err(json_error(422, &error)),
+        }
+    }
+
     fn require_docker_compose(&self) -> Result<(), String> {
         let info = self.docker.info();
         if !info.available {
@@ -2049,6 +2174,21 @@ fn field<'a>(fields: &'a HashMap<String, String>, name: &str) -> &'a str {
 fn optional_field<'a>(fields: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
     let value = field(fields, name);
     (!value.is_empty()).then_some(value)
+}
+
+fn validate_compose_text(compose: &str) -> Result<(), String> {
+    if compose.trim().is_empty() {
+        return Err("pega el contenido de docker-compose.yml".to_owned());
+    }
+    // Con formularios URL-encoded, el peor caso ocupa tres veces más bytes.
+    // 128 KiB mantiene la solicitud por debajo del límite HTTP de 512 KiB.
+    if compose.len() > 128 * 1024 {
+        return Err("el Compose supera el máximo de 128 KiB".to_owned());
+    }
+    if compose.contains('\0') {
+        return Err("el Compose contiene caracteres no válidos".to_owned());
+    }
+    Ok(())
 }
 
 fn query_u64(request: &Request, name: &str) -> Option<u64> {
@@ -2340,6 +2480,13 @@ mod tests {
     #[test]
     fn environment_editor_rejects_duplicate_keys() {
         assert!(parse_environment_with_reserved("PORT=3000\nPORT=4000", &[]).is_err());
+    }
+
+    #[test]
+    fn compose_text_requires_content_and_has_a_safe_size_limit() {
+        assert!(validate_compose_text("services:\n  app:\n    image: nginx:alpine\n").is_ok());
+        assert!(validate_compose_text(" \n").is_err());
+        assert!(validate_compose_text(&"x".repeat(128 * 1024 + 1)).is_err());
     }
 
     #[test]

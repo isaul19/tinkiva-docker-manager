@@ -381,7 +381,7 @@ test('la vista de procesos ordena por consumo', async () => {
   assert.match(text, /11\.4 MB/);
 });
 
-test('«Añadir recurso» ofrece los cuatro orígenes', async () => {
+test('«Añadir recurso» ofrece los orígenes Compose', async () => {
   const app = await mount({ token: 'x'.repeat(40) });
   await app.click('button', 'Añadir recurso');
 
@@ -390,6 +390,7 @@ test('«Añadir recurso» ofrece los cuatro orígenes', async () => {
   assert.match(text, /Imagen de Docker Hub/);
   assert.match(text, /Repositorio de GitHub/);
   assert.match(text, /Compose existente/);
+  assert.match(text, /Pegar Docker Compose/);
 });
 
 test('el paso de base de datos pinta los motores del catálogo', async () => {

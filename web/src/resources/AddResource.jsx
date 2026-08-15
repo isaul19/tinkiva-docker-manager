@@ -8,6 +8,7 @@ import { DatabaseForm } from './DatabaseForm.jsx';
 import { ImageForm } from './ImageForm.jsx';
 import { RepositoryForm } from './RepositoryForm.jsx';
 import { ComposeForm } from './ComposeForm.jsx';
+import { ComposeTextForm } from './ComposeTextForm.jsx';
 import { ResultPanel } from './ResultPanel.jsx';
 
 const TYPES = [
@@ -31,6 +32,13 @@ const TYPES = [
     description: 'Dockerfile, Node, Python o frontend estático con detección automática.',
     icon: <BrandIcon slug="github" size={24} color="#f4f6f8" />,
     form: RepositoryForm,
+  },
+  {
+    id: 'compose-text',
+    title: 'Pegar Docker Compose',
+    description: 'Pega un docker-compose.yml, guárdalo como recurso y edítalo después.',
+    icon: <Layers size={24} />,
+    form: ComposeTextForm,
   },
   {
     id: 'compose',

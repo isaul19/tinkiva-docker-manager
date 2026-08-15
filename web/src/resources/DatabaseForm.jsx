@@ -100,12 +100,12 @@ export function DatabaseForm({ onCreated }) {
         </Field>
 
         {engine.needs_database ? (
-          <Field label="Base de datos">
+          <Field label="Base de datos" hint="Nombre interno; usa letras, números o guion bajo.">
             <Input value={form.database} onInput={update('database')} required />
           </Field>
         ) : null}
         {engine.needs_username ? (
-          <Field label="Usuario">
+          <Field label="Usuario" hint="Cuenta que usará la aplicación para conectarse.">
             <Input value={form.username} onInput={update('username')} required />
           </Field>
         ) : null}
@@ -118,7 +118,7 @@ export function DatabaseForm({ onCreated }) {
           <Input type="password" value={form.password} onInput={update('password')} minLength={12} />
         </Field>
 
-        <Field label="RAM máxima (MB)">
+        <Field label="RAM máxima (MB)" hint={`Entre 64 y 16384 MB. Vacío = ${engine.default_memory_mb} MB.`}>
           <Input
             type="number"
             min="64"

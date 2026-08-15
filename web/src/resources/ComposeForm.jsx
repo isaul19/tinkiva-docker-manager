@@ -63,10 +63,10 @@ export function ComposeForm({ onCreated }) {
       </p>
 
       <FormGrid>
-        <Field label="Nombre">
+        <Field label="Nombre" hint="Nombre visible del recurso en el panel.">
           <Input value={form.name} onInput={onName} required maxLength={100} placeholder="Storagia API" />
         </Field>
-        <Field label="Slug">
+        <Field label="Slug" hint="Minúsculas, números y guiones; identifica el recurso y su webhook.">
           <Input
             value={form.slug}
             onInput={(event) => {
@@ -79,7 +79,7 @@ export function ComposeForm({ onCreated }) {
           />
         </Field>
 
-        <Field label="Archivo Compose" wide>
+        <Field label="Archivo Compose" hint="Ruta al YAML dentro de la raíz permitida; puede ser relativa." wide>
           <Input
             value={form.compose_file}
             onInput={update('compose_file')}
@@ -87,7 +87,7 @@ export function ComposeForm({ onCreated }) {
             placeholder="storagia/compose.yaml"
           />
         </Field>
-        <Field label="Archivo .env (opcional)" wide>
+        <Field label="Archivo .env (opcional)" hint="Ruta dentro de la raíz permitida. Necesario si usas una variable de imagen." wide>
           <Input value={form.env_file} onInput={update('env_file')} placeholder="storagia/.env" />
         </Field>
 

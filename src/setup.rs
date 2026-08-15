@@ -200,7 +200,7 @@ pub fn run_wizard(current: Option<&HashMap<String, String>>) -> Result<(), Strin
     println!("  ✔ Panel:            http://{bind}");
     println!("  ✔ Datos:            {data_dir}");
     println!("  ✔ Apps Compose:     {allowed_root}");
-    if current_token.is_none() {
+    if current_token != Some(admin_token.as_str()) {
         println!("  ✔ Token:            {admin_token}");
         println!("  Guárdalo ahora: no se volverá a mostrar completo en pantalla.");
     }

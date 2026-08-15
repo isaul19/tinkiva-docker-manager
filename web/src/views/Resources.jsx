@@ -1,5 +1,5 @@
 import { useState } from "preact/hooks";
-import { Boxes, FileText, Github, Layers, Rocket, Settings2, Trash2, Undo2, Webhook } from "lucide-preact";
+import { Boxes, FilePenLine, FileText, Github, Layers, Rocket, Settings2, Trash2, Undo2, Webhook } from "lucide-preact";
 import { api } from "../lib/api.js";
 import { useApp } from "../lib/context.js";
 import { useAsync, usePolling } from "../lib/hooks.js";
@@ -44,6 +44,7 @@ export function Resources() {
   const [deployFor, setDeployFor] = useState(null);
   const [deleteFor, setDeleteFor] = useState(null);
   const [envFor, setEnvFor] = useState(null);
+  const [composeFor, setComposeFor] = useState(null);
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(null);
 
@@ -93,6 +94,23 @@ export function Resources() {
       const result = await api.post(`/api/projects/${project.slug}/environment`, { environment });
       toast.success(result.message || "Variables actualizadas.");
       setEnvFor(null); projects.reload(); refresh();
+    } catch (error) { toast.error(error); } finally { setBusy(null); }
+  };
+
+  const openCompose = async (project) => {
+    setBusy(`${project.slug}:compose-read`);
+    try {
+      const result = await api.get(`/api/projects/${project.slug}/compose`);
+      setComposeFor({ project, compose: result.compose || '' });
+    } catch (error) { toast.error(error); } finally { setBusy(null); }
+  };
+
+  const saveCompose = async (project, compose) => {
+    setBusy(`${project.slug}:compose`);
+    try {
+      const result = await api.post(`/api/projects/${project.slug}/compose`, { compose });
+      toast.success(result.message || 'Compose guardado.');
+      setComposeFor(null); projects.reload(); refresh();
     } catch (error) { toast.error(error); } finally { setBusy(null); }
   };
 
@@ -235,6 +253,7 @@ export function Resources() {
                     {project.runtime_status === "running" ? "Redesplegar" : "Desplegar"}
                   </Button>
                   <Button size="sm" icon={FileText} onClick={() => setLogsFor(project)}>Logs</Button>
+                  {project.kind === "compose" ? <Button size="sm" icon={FilePenLine} loading={busy === `${project.slug}:compose-read`} onClick={() => openCompose(project)}>Editar YAML</Button> : null}
                   <Button size="sm" icon={Settings2} loading={busy === `${project.slug}:environment-read`} disabled={!project.env_file} onClick={() => openEnvironment(project)} title={project.env_file ? "Editar variables de entorno" : "Este recurso no tiene .env gestionado"}>Variables</Button>
                   <Button
                     size="sm"
@@ -283,6 +302,10 @@ export function Resources() {
         <EnvironmentDialog state={envFor} busy={busy?.endsWith(":environment")} onClose={() => setEnvFor(null)} onSubmit={saveEnvironment} />
       ) : null}
 
+      {composeFor ? (
+        <ComposeDialog state={composeFor} busy={busy?.endsWith(":compose")} onClose={() => setComposeFor(null)} onSubmit={saveCompose} />
+      ) : null}
+
       <DeleteDialog
         project={deleteFor}
         busy={busy?.endsWith(":delete")}
@@ -291,6 +314,21 @@ export function Resources() {
       />
     </>
   );
+}
+
+function ComposeDialog({ state, busy, onClose, onSubmit }) {
+  const [compose, setCompose] = useState(state?.compose || "");
+  if (!state) return null;
+  return <Modal open onClose={onClose} eyebrow="COMPOSE" title={`Editar YAML de ${state.project.name}`} description="Edita el docker-compose.yml como texto puro. Al guardar se valida; despliega el recurso cuando quieras aplicar los cambios." footer={<>
+    <Button onClick={onClose}>Cancelar</Button>
+    <Button variant="primary" loading={busy} onClick={() => onSubmit(state.project, compose)}>Guardar YAML</Button>
+  </>}>
+    <FormGrid columns={1}>
+      <Field label="docker-compose.yml" hint="Se valida con Docker Compose antes de guardar." wide>
+        <TextArea rows={18} spellcheck={false} value={compose} onInput={(event) => setCompose(event.currentTarget.value)} />
+      </Field>
+    </FormGrid>
+  </Modal>;
 }
 
 function DeployDialog({ project, busy, onClose, onSubmit }) {

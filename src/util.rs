@@ -201,7 +201,9 @@ pub fn parse_urlencoded(value: &str) -> Result<HashMap<String, String>, String> 
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
         let key = percent_decode(key, true)?;
         let value = percent_decode(value, true)?;
-        if key.len() > 128 || value.len() > 16_384 {
+        // El editor de Compose acepta YAML de hasta 128 KiB. Codificado como
+        // formulario cabe aun en el peor caso dentro del límite HTTP de 512 KiB.
+        if key.len() > 128 || value.len() > 128 * 1024 {
             return Err("campo demasiado grande".to_owned());
         }
         fields.insert(key, value);

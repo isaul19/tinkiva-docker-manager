@@ -52,17 +52,19 @@ function ImagePicker({ onPick }) {
 
   return (
     <div class="image-picker">
-      <div class="input-with-icon">
-        <Search size={16} />
-        <input
-          class="input"
-          type="search"
-          placeholder="Busca en Docker Hub: nginx, n8n, minio…"
-          value={query}
-          onInput={(event) => setQuery(event.currentTarget.value)}
-          autofocus
-        />
-      </div>
+      <Field label="Buscar imagen" hint="Busca en Docker Hub o pega una referencia completa, por ejemplo ghcr.io/usuario/app:1.0.">
+        <div class="input-with-icon">
+          <Search size={16} />
+          <input
+            class="input"
+            type="search"
+            placeholder="Busca en Docker Hub: nginx, n8n, minio…"
+            value={query}
+            onInput={(event) => setQuery(event.currentTarget.value)}
+            autofocus
+          />
+        </div>
+      </Field>
 
       {loading ? <Spinner label="Buscando en Docker Hub…" /> : null}
       {error ? <p class="field-message">{error.message}</p> : null}
@@ -209,7 +211,7 @@ export function ImageForm({ onCreated }) {
       </div>
 
       <FormGrid>
-        <Field label="Nombre">
+        <Field label="Nombre" hint="Nombre visible del recurso en el panel.">
           <Input value={form.name} onInput={onName} required maxLength={100} />
         </Field>
         <Field label="Slug" hint="Se genera desde el nombre; puedes editarlo si lo necesitas.">
@@ -235,7 +237,7 @@ export function ImageForm({ onCreated }) {
             <Input value={form.tag} onInput={update('tag')} required />
           )}
         </Field>
-        <Field label="RAM máxima (MB)">
+        <Field label="RAM máxima (MB)" hint="Entre 64 y 16384 MB para el contenedor.">
           <Input type="number" min="64" max="16384" value={form.memory_mb} onInput={update('memory_mb')} />
         </Field>
 
@@ -300,7 +302,10 @@ export function ImageForm({ onCreated }) {
             setForm((current) => ({ ...current, auto_deploy: event.currentTarget.checked }))
           }
         />
-        Auto Deploy cuando cambie el digest de la imagen
+        <span>
+          Auto Deploy cuando cambie el digest de la imagen
+          <span class="field-hint">Comprueba periódicamente si hay una imagen nueva y redespliega el recurso.</span>
+        </span>
       </label>
 
       <div class="form-actions">
