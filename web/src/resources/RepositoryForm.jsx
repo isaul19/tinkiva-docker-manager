@@ -251,7 +251,7 @@ export function RepositoryForm({ onCreated }) {
             placeholder="3000"
           />
         </Field>
-        <Field label="Puerto local" hint="Se publica solo en 127.0.0.1.">
+        <Field label="Puerto local" hint="Vacío = el mismo que el contenedor. Se publica solo en 127.0.0.1.">
           <Input
             type="number"
             min="1"

@@ -128,6 +128,16 @@ grep -qx 'APP_IMAGE=nginx:1.27-alpine' "$TMP/apps/demo-proxy/.env"
 grep -qx 'LOG_LEVEL=info' "$TMP/apps/demo-proxy/.env"
 grep -q '"127.0.0.1:8099:80"' "$TMP/apps/demo-proxy/compose.yaml"
 
+# Sin puerto local se publica en el mismo puerto que el contenedor.
+curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/image" \
+  --data-urlencode 'slug=demo-same-port' \
+  --data-urlencode 'name=Same port' \
+  --data-urlencode 'image=nginx:1.27-alpine' \
+  --data-urlencode 'container_port=3000' \
+  | jq -e '.deployment.status == "success"' >/dev/null
+grep -q '"127.0.0.1:3000:3000"' "$TMP/apps/demo-same-port/compose.yaml"
+curl -fsS "${AUTH[@]}" -X DELETE "$BASE/api/projects/demo-same-port?remove=all" >/dev/null
+
 # Variables reservadas y rutas de escape deben rechazarse.
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/image" \
   --data-urlencode 'slug=demo-bad' --data-urlencode 'name=Malo' \

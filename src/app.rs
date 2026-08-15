@@ -1431,10 +1431,15 @@ impl App {
             Ok(port) => port,
             Err(error) => return json_error(422, &error),
         };
-        let published_port = match parse_port(&fields, "published_port") {
+        let mut published_port = match parse_port(&fields, "published_port") {
             Ok(port) => port,
             Err(error) => return json_error(422, &error),
         };
+        // Puerto local vacío → se publica en el mismo puerto que escucha el
+        // contenedor; sin ninguno el servicio queda solo en la red interna.
+        if published_port.is_none() && container_port.is_some() {
+            published_port = container_port;
+        }
         if published_port.is_some() && container_port.is_none() {
             return json_error(422, "indica también el puerto interno del contenedor");
         }
@@ -1533,10 +1538,15 @@ impl App {
             Ok(port) => port,
             Err(error) => return json_error(422, &error),
         };
-        let published_port = match parse_port(&fields, "published_port") {
+        let mut published_port = match parse_port(&fields, "published_port") {
             Ok(port) => port,
             Err(error) => return json_error(422, &error),
         };
+        // Puerto local vacío → se publica en el mismo puerto que escucha el
+        // contenedor; sin ninguno el servicio queda solo en la red interna.
+        if published_port.is_none() && container_port.is_some() {
+            published_port = container_port;
+        }
         let memory_mb = optional_field(&fields, "memory_mb")
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(512)
