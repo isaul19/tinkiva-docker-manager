@@ -383,7 +383,8 @@ impl DockerClient {
         self.run(["pull", "--quiet", image], None, Duration::from_secs(600))
     }
 
-    /// Aplica una imagen que el watcher ya descargó, evitando un segundo pull.
+    /// Aplica `compose up -d` sin `--build`: para una imagen que ya está en el
+    /// Docker local (pull del watcher, rollback o restauración automática).
     pub fn deploy_pulled(&self, project: &Project) -> Result<CommandResult, String> {
         let compose = project.compose_file.to_string_lossy().into_owned();
         self.run(

@@ -849,9 +849,45 @@ impl App {
             .map_err(|error| ApiError::new(500, format!("no se pudo restaurar el Dockerfile generado: {error}")))
     }
 
+    /// Pasa un recurso de repositorio creado antes del pin por commit: el
+    /// Compose pasa a resolver la imagen desde `APP_IMAGE`, el `.env` arranca
+    /// con la etiqueta histórica y el proyecto queda con rollback habilitado.
+    /// Es idempotente: si ya migró, no hace nada.
+    fn migrate_repository_image(&self, project: &Project) -> Result<(), ApiError> {
+        if project.image_env.is_some() {
+            return Ok(());
+        }
+        let Some(env_path) = &project.env_file else {
+            return Err(ApiError::new(
+                500,
+                "el recurso de repositorio no tiene .env; vuelve a crearlo",
+            ));
+        };
+        let env_file = canonical_existing_within(&self.config.allowed_root, env_path)
+            .map_err(|error| ApiError::new(422, error))?;
+
+        let legacy_line = format!("    image: tinkiva/{}:latest\n", project.slug);
+        if let Ok(compose) = fs::read_to_string(&project.compose_file) {
+            if compose.contains(&legacy_line) {
+                let patched = compose.replace(&legacy_line, "    image: ${APP_IMAGE}\n");
+                atomic_write(&project.compose_file, patched.as_bytes(), 0o640).map_err(|error| {
+                    ApiError::new(500, format!("no se pudo actualizar el Compose: {error}"))
+                })?;
+            }
+        }
+
+        let tag = format!("tinkiva/{}:latest", project.slug);
+        set_env_value(&env_file, "APP_IMAGE", &tag)
+            .map_err(|error| ApiError::new(500, format!("no se pudo actualizar .env: {error}")))?;
+        self.store
+            .set_image_env(&project.slug, "APP_IMAGE".to_owned())
+            .map_err(|error| ApiError::new(500, format!("no se pudo registrar APP_IMAGE: {error}")))?;
+        Ok(())
+    }
+
     fn perform_deploy(
         &self,
-        project: Project,
+        mut project: Project,
         image: Option<String>,
         branch: Option<String>,
         commit: Option<String>,
@@ -891,15 +927,36 @@ impl App {
         };
 
         let started = Instant::now();
+        let requested_image = image.clone();
         let mut previous_image = project.current_image.clone();
         let mut env_target: Option<(PathBuf, String)> = None;
 
         let synced_commit = if project.kind == KIND_REPOSITORY {
-            self.sync_repository(&project)?
+            // Un despliegue con imagen fija (rollback) no toca el clon: la
+            // imagen anterior ya está construida en el Docker local.
+            if image.is_none() {
+                self.migrate_repository_image(&project)?;
+                project.image_env = Some("APP_IMAGE".to_owned());
+                self.sync_repository(&project)?
+            } else {
+                None
+            }
         } else {
             None
         };
         let commit = commit.or(synced_commit);
+
+        // Los builds de repositorio se etiquetan por commit: cada versión queda
+        // en el Docker local y el rollback vuelve a ella sin reconstruir.
+        let mut image = image;
+        if project.kind == KIND_REPOSITORY && image.is_none() {
+            if let Some(sha) = commit.as_deref() {
+                let tag = format!("tinkiva/{}:{}", project.slug, &sha[..sha.len().min(12)]);
+                if valid_image_ref(&tag) {
+                    image = Some(tag);
+                }
+            }
+        }
 
         if let Some(new_image) = &image {
             let (Some(env_file), Some(image_env)) = (&project.env_file, &project.image_env) else {
@@ -919,7 +976,9 @@ impl App {
         }
 
         let effective_image = image.clone().or_else(|| previous_image.clone());
-        let command = if trigger == "registry-poll" {
+        // Con imagen explícita (rollback o pin manual) no se reconstruye:
+        // `up -d` aplica la etiqueta que ya vive en el Docker local.
+        let command = if trigger == "registry-poll" || requested_image.is_some() {
             self.docker.deploy_pulled(&project)
         } else {
             self.docker.deploy(&project)
@@ -956,22 +1015,31 @@ impl App {
                 None => remove_env_key(env_file, image_env),
             };
             match restored {
-                Ok(()) => match self.docker.deploy(&project) {
-                    Ok(rollback) if rollback.success => {
-                        message.push_str(" | Restauración automática completada.");
-                        let _ = self
-                            .store
-                            .update_current_image(&project.slug, previous_image.clone());
+                Ok(()) => {
+                    // En repositorios la imagen anterior ya está construida;
+                    // sin --build la restauración es inmediata.
+                    let restore = if project.kind == KIND_REPOSITORY {
+                        self.docker.deploy_pulled(&project)
+                    } else {
+                        self.docker.deploy(&project)
+                    };
+                    match restore {
+                        Ok(rollback) if rollback.success => {
+                            message.push_str(" | Restauración automática completada.");
+                            let _ = self
+                                .store
+                                .update_current_image(&project.slug, previous_image.clone());
+                        }
+                        Ok(rollback) => {
+                            message.push_str(" | La restauración automática también falló: ");
+                            message.push_str(&rollback.summary());
+                        }
+                        Err(error) => {
+                            message.push_str(" | No se pudo ejecutar la restauración automática: ");
+                            message.push_str(&error);
+                        }
                     }
-                    Ok(rollback) => {
-                        message.push_str(" | La restauración automática también falló: ");
-                        message.push_str(&rollback.summary());
-                    }
-                    Err(error) => {
-                        message.push_str(" | No se pudo ejecutar la restauración automática: ");
-                        message.push_str(&error);
-                    }
-                },
+                }
                 Err(error) => {
                     message.push_str(" | No se pudo restaurar el archivo .env: ");
                     message.push_str(&error.to_string());
@@ -1584,7 +1652,7 @@ impl App {
                 repository: Some(repository.to_owned()),
                 installation_id: Some(installation_id),
                 branch: Some(branch.to_owned()),
-                image_env: None,
+                image_env: Some("APP_IMAGE".to_owned()),
                 current_image: Some(generated.image.clone()),
                 auto_deploy: field(&fields, "auto_deploy") != "false",
                 generated,

@@ -421,7 +421,7 @@ pub fn repository(request: &RepositoryRequest) -> GeneratedResource {
             "    build:\n",
             "      context: ./repo/{context}\n",
             "      dockerfile: {dockerfile}\n",
-            "    image: tinkiva/{host}:latest\n",
+            "    image: ${{APP_IMAGE}}\n",
             "    container_name: {host}\n",
             "    restart: unless-stopped\n",
             "    env_file:\n",
@@ -445,7 +445,9 @@ pub fn repository(request: &RepositoryRequest) -> GeneratedResource {
         network = SHARED_NETWORK,
     );
 
-    let mut env = format!("TDM_MEMORY_LIMIT={}m\n", request.memory_mb);
+    // Cada despliegue fija APP_IMAGE a `tinkiva/<slug>:<commit>`: las versiones
+    // anteriores quedan en el Docker local y el rollback no necesita reconstruir.
+    let mut env = format!("APP_IMAGE=tinkiva/{host}:latest\nTDM_MEMORY_LIMIT={memory}m\n", host = host, memory = request.memory_mb);
     for (key, value) in request.environment {
         env.push_str(&format!("{key}={value}\n"));
     }
@@ -574,5 +576,7 @@ mod tests {
         assert!(generated.compose.contains("context: ./repo/services/api"));
         assert!(!generated.compose.contains("ports:"));
         assert_eq!(generated.image, "tinkiva/storagia-api:latest");
+        assert!(generated.compose.contains("image: ${APP_IMAGE}"));
+        assert!(generated.env.contains("APP_IMAGE=tinkiva/storagia-api:latest"));
     }
 }

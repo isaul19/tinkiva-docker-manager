@@ -97,6 +97,19 @@ impl Store {
         self.save_locked(&state)
     }
 
+    /// Habilita la indirección de imagen en proyectos creados antes de que
+    /// existiera (recursos de repositorio con etiqueta fija).
+    pub fn set_image_env(&self, slug: &str, image_env: String) -> Result<(), String> {
+        let mut state = self.lock()?;
+        let project = state
+            .projects
+            .iter_mut()
+            .find(|project| project.slug == slug)
+            .ok_or_else(|| "proyecto no encontrado".to_owned())?;
+        project.image_env = Some(image_env);
+        self.save_locked(&state)
+    }
+
     pub fn append_deployment(&self, mut deployment: Deployment) -> Result<Deployment, String> {
         let mut state = self.lock()?;
         deployment.id = state.next_deployment_id;
