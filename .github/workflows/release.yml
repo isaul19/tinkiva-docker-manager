@@ -16,9 +16,11 @@ jobs:
         include:
           - arch: amd64
             runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
 
           - arch: arm64
             runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
 
     runs-on: ${{ matrix.runner }}
 
@@ -30,15 +32,16 @@ jobs:
         run: |
           rustup toolchain install 1.97.1 --profile minimal
           rustup default 1.97.1
+          rustup target add ${{ matrix.target }}
 
       - name: Build release
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Prepare binary
         run: |
           mkdir -p dist
 
-          cp target/release/tinkiva-docker-manager \
+          cp target/${{ matrix.target }}/release/tinkiva-docker-manager \
             dist/tinkiva-docker-manager-linux-${{ matrix.arch }}
 
           chmod +x \
