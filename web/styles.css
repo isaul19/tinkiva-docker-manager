@@ -117,6 +117,7 @@ th.sortable .sort-ind { margin-left: .3rem; color: var(--accent); font-size: .6r
 td { font-size: .79rem; }
 tbody tr:last-child td { border-bottom: 0; }
 .cell-primary { font-weight: 750; }
+.cell-dim { color: var(--muted); font-variant-numeric: tabular-nums; }
 .cell-secondary { display: block; margin-top: .2rem; color: var(--muted); font-size: .68rem; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge { display: inline-flex; align-items: center; gap: .35rem; padding: .28rem .5rem; border-radius: 99px; background: #222833; color: #c7cdd5; font-size: .67rem; font-weight: 750; }
 .badge.success, .badge.running { background: rgba(114,230,167,.11); color: var(--accent); }

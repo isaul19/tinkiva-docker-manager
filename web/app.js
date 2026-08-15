@@ -4,6 +4,7 @@ const TOKEN_KEY = 'tdm_admin_token';
 const titles = {
   dashboard: ['OPERACIONES', 'Resumen'],
   containers: ['DOCKER', 'Contenedores'],
+  processes: ['HOST', 'Procesos'],
   projects: ['COMPOSE', 'Proyectos'],
   history: ['AUDITORÍA', 'Despliegues'],
   postgres: ['PLANTILLA', 'PostgreSQL'],
@@ -16,6 +17,8 @@ const state = {
   info: null,
   metrics: null,
   containers: [],
+  processes: [],
+  processSort: { key: 'cpu_percent', dir: 'desc' },
   projects: [],
   history: [],
   busy: 0,
@@ -175,6 +178,7 @@ async function refreshPage() {
   try {
     if (state.page === 'dashboard') await loadDashboard();
     if (state.page === 'containers') await loadContainers(true);
+    if (state.page === 'processes') await loadProcesses(true);
     if (state.page === 'projects') await loadProjects(true);
     if (state.page === 'history') await loadHistory(true);
     if (state.page === 'settings') await loadSystem();
@@ -186,7 +190,7 @@ async function refreshPage() {
 function startAutoRefresh() {
   clearInterval(state.timer);
   state.timer = window.setInterval(() => {
-    if (document.hidden || state.busy > 0 || !['dashboard', 'containers'].includes(state.page)) return;
+    if (document.hidden || state.busy > 0 || !['dashboard', 'containers', 'processes'].includes(state.page)) return;
     refreshPage();
   }, 15000);
 }
@@ -303,6 +307,80 @@ async function containerAction(name, action) {
   const result = await api(`/api/containers/${encodeURIComponent(name)}/${action}`, { method: 'POST', form: {} });
   toast(result.message || 'Acción completada.');
   await loadContainers(true);
+}
+
+const PROCESS_STATES = {
+  R: ['ejecutando', 'running'],
+  S: ['durmiendo', ''],
+  I: ['inactivo', ''],
+  D: ['esperando I/O', 'pending'],
+  Z: ['zombie', 'failed'],
+  T: ['detenido', 'pending'],
+  t: ['trazado', 'pending'],
+  X: ['muerto', 'failed'],
+};
+
+async function loadProcesses(render = true) {
+  state.processes = await api('/api/processes');
+  if (render) renderProcesses();
+}
+
+function sortProcesses() {
+  const { key, dir } = state.processSort;
+  const factor = dir === 'asc' ? 1 : -1;
+  return [...state.processes].sort((a, b) => {
+    const left = a[key];
+    const right = b[key];
+    if (typeof left === 'number' && typeof right === 'number') {
+      return (left - right) * factor;
+    }
+    return String(left).localeCompare(String(right)) * factor;
+  });
+}
+
+function renderProcesses() {
+  const target = $('#processes-content');
+  const rows = sortProcesses();
+  if (!rows.length) {
+    target.innerHTML = '<div class="empty-state">No se pudo leer ningún proceso.</div>';
+    return;
+  }
+  const indicator = (key) => {
+    if (state.processSort.key !== key) return '';
+    return state.processSort.dir === 'desc' ? ' <span class="sort-ind">▼</span>' : ' <span class="sort-ind">▲</span>';
+  };
+  target.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr>
+      <th>PID</th>
+      <th>Proceso</th>
+      <th>Usuario</th>
+      <th>Estado</th>
+      <th class="sortable" data-sort="cpu_percent">CPU${indicator('cpu_percent')}</th>
+      <th class="sortable" data-sort="memory_bytes">Memoria${indicator('memory_bytes')}</th>
+    </tr></thead>
+    <tbody>${rows.map((proc) => {
+      const [stateLabel, badgeClass] = PROCESS_STATES[proc.state] || [proc.state, ''];
+      const cpuPercent = Number(proc.cpu_percent || 0);
+      const cpuClass = cpuPercent >= 50 ? 'failed' : cpuPercent >= 20 ? 'pending' : 'success';
+      return `<tr>
+        <td class="cell-dim">${proc.pid}</td>
+        <td><span class="cell-primary">${escapeHtml(proc.name)}</span><span class="cell-secondary" title="${escapeHtml(proc.command)}">${escapeHtml(proc.command)}</span></td>
+        <td>${escapeHtml(proc.user)}</td>
+        <td><span class="badge ${badgeClass}">${escapeHtml(stateLabel)}</span></td>
+        <td><span class="badge ${cpuClass}">${cpuPercent.toFixed(1)}%</span></td>
+        <td>${escapeHtml(formatBytes(proc.memory_bytes))}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div>`;
+}
+
+function toggleProcessSort(key) {
+  if (state.processSort.key === key) {
+    state.processSort.dir = state.processSort.dir === 'desc' ? 'asc' : 'desc';
+  } else {
+    state.processSort = { key, dir: key === 'name' ? 'asc' : 'desc' };
+  }
+  renderProcesses();
 }
 
 async function loadProjects(render = true) {
@@ -488,6 +566,10 @@ $('#logout-button').addEventListener('click', () => logout());
 $('#refresh-button').addEventListener('click', refreshPage);
 $('#refresh-logs').addEventListener('click', refreshLogs);
 $('#history-filter').addEventListener('change', () => loadHistory(true).catch((error) => toast(error.message, 'error')));
+$('#processes-content').addEventListener('click', (event) => {
+  const header = event.target.closest('th[data-sort]');
+  if (header) toggleProcessSort(header.dataset.sort);
+});
 $('#open-project-dialog').addEventListener('click', () => $('#project-dialog').showModal());
 
 $$('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => closeDialog(button)));
