@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.0 — 2026-08-15
+
+### Detección automática de aplicaciones
+
+- Los repositorios sin `Dockerfile` ya se pueden desplegar: el panel detecta el tipo de
+  aplicación y genera la receta. Soporta Node con npm, pnpm o Yarn; frontends Vite y
+  Create React App compilados y servidos por Nginx con fallback SPA; Python con FastAPI,
+  Flask, Django o un `main.py`/`app.py` convencional; y sitios estáticos con `index.html`.
+- El Dockerfile generado se guarda fuera del clon (`<slug>/.tinkiva.Dockerfile`) y se
+  restaura dentro del contexto después de cada sincronización, sin tocar el repositorio.
+- El selector «Tipo de aplicación» permite detección automática o exigir el Dockerfile;
+  el puerto del contenedor se deduce del runtime (80 estático, 3000 Node, 8000 Python).
+- En monorepos, el contexto de build se valida con rutas canónicas contra la raíz del clon.
+
+### Salud de Docker y Compose
+
+- El alta de cualquier recurso falla pronto con 503 si Docker o Compose no responden,
+  en vez de fallar a mitad de operación.
+- La página Sistema y el diálogo «Añadir recurso» distinguen entre Docker caído y
+  Compose ausente, cada uno con su mensaje.
+
 ## 0.3.0 — 2026-08-15
 
 ### Auto-deploy sin exponer el panel
