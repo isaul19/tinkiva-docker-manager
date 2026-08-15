@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4 — 2026-08-14
+
+- Comando `tinkivadm logs [N] [-f]`: últimas N líneas del log y seguimiento en vivo.
+- Comando `tinkivadm help` con la lista completa de comandos.
+
 ## 0.1.3 — 2026-08-14
 
 - Todo el estado local (config, pid, log, datos, apps) vive dentro de `tinkiva/`.
