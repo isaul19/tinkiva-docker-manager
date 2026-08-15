@@ -333,18 +333,17 @@ test('la vista de GitHub ofrece el alta de un clic cuando no hay App', async () 
   assert.match(text, /Ya tengo una GitHub App/);
 });
 
-test('sobre localhost avisa de que la App se creará sin webhook', async () => {
-  // GitHub rechaza el manifiesto si el webhook apunta a una dirección privada;
-  // la interfaz debe explicarlo antes de enviar, no dejar que falle en GitHub.
+test('sobre localhost explica que no necesita webhook ni puerto público', async () => {
+  // El auto-deploy es por polling saliente: la App se crea sin webhook y el
+  // panel puede quedarse en localhost sin configurar nada más.
   const app = await mount({ token: 'x'.repeat(40), hash: '#/github' });
   const text = app.currentText();
 
   assert.match(text, /http:\/\/localhost:8787/);
-  assert.match(text, /sin webhook/);
-  assert.match(text, /no habrá redespliegue automático/);
-  assert.match(text, /URL pública del panel/);
+  assert.match(text, /Sin webhook ni puerto público/);
+  assert.match(text, /HTTPS saliente/);
 
-  // El botón de conectar sigue habilitado: sin webhook el resto funciona igual.
+  // El botón de conectar está habilitado: no hay ningún requisito extra.
   const connect = app.find('button', 'Conectar con GitHub');
   assert.ok(connect && !connect.disabled, 'debe poder conectarse igualmente');
 });

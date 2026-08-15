@@ -67,6 +67,12 @@ function ImagePicker({ onPick }) {
       {loading ? <Spinner label="Buscando en Docker Hub…" /> : null}
       {error ? <p class="field-message">{error.message}</p> : null}
 
+      {debounced.includes('/') && !debounced.includes(' ') ? (
+        <Button onClick={() => onPick(debounced.trim())}>
+          Usar referencia exacta: {debounced.trim()}
+        </Button>
+      ) : null}
+
       {!loading ? (
         <>
           {!results ? <p class="picker-hint muted small">Sugerencias populares</p> : null}
@@ -120,23 +126,37 @@ export function ImageForm({ onCreated }) {
     memory_mb: '512',
     volume_path: '',
     environment: '',
+    auto_deploy: true,
   });
 
   const update = (key) => (event) =>
     setForm((current) => ({ ...current, [key]: event.currentTarget.value }));
 
   const pick = async (name) => {
-    setRepository(name);
-    const shortName = name.split('/').pop();
+    const lastSlash = name.lastIndexOf('/');
+    const lastColon = name.lastIndexOf(':');
+    const hasTag = lastColon > lastSlash;
+    const imageName = hasTag ? name.slice(0, lastColon) : name;
+    const requestedTag = hasTag ? name.slice(lastColon + 1) : null;
+    setRepository(imageName);
+    const shortName = imageName.split('/').pop();
     setForm((current) => ({
       ...current,
       name: current.name || shortName,
       slug: slugTouched ? current.slug : toSlug(shortName),
+      tag: requestedTag || current.tag,
     }));
+
+    const firstSegment = imageName.split('/')[0];
+    const externalRegistry = firstSegment.includes('.') || firstSegment.includes(':');
+    if (externalRegistry) {
+      setTags([]);
+      return;
+    }
 
     setLoadingTags(true);
     try {
-      const data = await api.get('/api/registry/tags', { image: name });
+      const data = await api.get('/api/registry/tags', { image: imageName });
       setTags(data.tags || []);
       const preferred = (data.tags || []).find((tag) => tag.name === 'latest') || data.tags?.[0];
       if (preferred) setForm((current) => ({ ...current, tag: preferred.name }));
@@ -243,6 +263,17 @@ export function ImageForm({ onCreated }) {
           />
         </Field>
       </FormGrid>
+
+      <label class="inline-field checkbox">
+        <input
+          type="checkbox"
+          checked={form.auto_deploy}
+          onChange={(event) =>
+            setForm((current) => ({ ...current, auto_deploy: event.currentTarget.checked }))
+          }
+        />
+        Auto Deploy cuando cambie el digest de la imagen
+      </label>
 
       <div class="form-actions">
         <Button variant="primary" type="submit" loading={busy}>

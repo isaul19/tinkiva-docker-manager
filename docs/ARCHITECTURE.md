@@ -47,7 +47,7 @@ verificables contra los vectores de prueba de FIPS 180-4 y RFC 4231.
 
 ## Persistencia
 
-`state.db` es un formato de líneas `TDM2`, no una base de datos. Cada campo textual se codifica por porcentaje, y cada modificación reescribe el archivo mediante:
+`state.db` es un formato de líneas `TDM3`, no una base de datos. Cada campo textual se codifica por porcentaje, y cada modificación reescribe el archivo mediante:
 
 1. Archivo temporal `0600` en el mismo directorio.
 2. `write_all`.
@@ -59,7 +59,7 @@ El historial está acotado por `TDM_MAX_HISTORY`.
 
 El formato anterior `TDM1` se sigue leyendo: a las líneas de proyecto les faltan los cuatro
 campos de tipo y origen, que se rellenan como proyecto Compose sin repositorio. El archivo
-queda reescrito en `TDM2` en el primer guardado.
+queda reescrito en `TDM3` en el primer guardado. TDM3 añade el indicador `auto_deploy`.
 
 Las credenciales de la GitHub App viven aparte, en `<TDM_DATA_DIR>/github.json` con
 permisos `0600`. El endpoint de estado nunca las devuelve: hay una prueba que comprueba que
@@ -103,14 +103,15 @@ El deployment global es exclusivo:
 
 La respuesta HTTP es síncrona. GitHub Actions recibe el resultado real del deploy y puede fallar el job.
 
-## Webhooks
+## Polling y webhook propio
 
-Hay dos entradas, ambas fuera de la autenticación Bearer:
+Un único watcher secuencial consulta GitHub y los registries en el intervalo configurado.
+Para repositorios compara el SHA remoto con el `HEAD` local. Para imágenes ejecuta un pull,
+compara el ID inmutable local antes y después y aplica Compose solo si cambió. No hay webhook
+de GitHub ni puerto público obligatorio.
 
-- `/hooks/deploy/:slug`, con un token por proyecto comparado en tiempo constante.
-- `/hooks/github`, validado con HMAC-SHA256 sobre el cuerpo crudo contra el secreto que
-  GitHub generó al crear la App. Solo actúa sobre eventos `push`, y despliega los proyectos
-  cuyo repositorio y rama coincidan.
+Se conserva `/hooks/deploy/:slug` como integración opcional, con un token por proyecto
+comparado en tiempo constante.
 
 Los retornos del navegador desde GitHub (`/github/callback`, `/github/installed`) tampoco
 llevan `Authorization`, porque son navegaciones y no llamadas de la interfaz. Se validan

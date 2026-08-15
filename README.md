@@ -19,7 +19,7 @@ Panel de despliegue Docker de un solo nodo, escrito en Rust y diseñado para ser
   - **Compose existente**: registro de un stack que ya vive en el servidor.
 - Integración con GitHub App de un clic: el panel te lleva a GitHub, GitHub crea la App
   y vuelve con las credenciales; después eliges en qué repositorios instalarla.
-- Deploy manual o por webhook desde GitHub Actions.
+- Deploy manual, por polling saliente o por webhook propio opcional.
 - Restricción opcional por rama.
 - Imágenes inmutables por SHA.
 - Historial persistente y rollback de imagen.
@@ -42,14 +42,12 @@ Estas exclusiones mantienen pequeño el proceso permanente y reducen superficie 
 ## Arquitectura
 
 ```text
-GitHub push (main / dev / uat)
-        │
-        ▼
-GitHub Actions
-  build + push GHCR
-        │
-        │ POST HTTPS + token + image SHA
-        ▼
+GitHub API                     Registry
+ commit SHA                   image digest
+        │                       │
+        └────── watcher saliente ─────┘
+                    │
+                    ▼
 Tinkiva Docker Manager (Rust, un proceso)
         │
         ├── actualiza APP_IMAGE en .env de forma atómica
@@ -221,9 +219,11 @@ http://127.0.0.1:8787
 
 El token se guarda en `sessionStorage`: se elimina al cerrar la pestaña y no se persiste en `localStorage`.
 
-## Exponerlo para GitHub Actions
+## Webhook propio opcional
 
-GitHub debe alcanzar el webhook por HTTPS. Mantén el backend en localhost y usa un reverse proxy existente. Se incluye `deploy/nginx.example.conf`.
+El auto-deploy normal no requiere exponer el panel. Si eliges integrar un sistema externo
+con `/hooks/deploy/:slug`, ese sistema sí debe poder alcanzar el endpoint por HTTPS. Mantén
+el backend en localhost y usa un reverse proxy existente; se incluye `deploy/nginx.example.conf`.
 
 No publiques el puerto directamente por HTTP: tanto el token administrador como el token del webhook son credenciales.
 
@@ -370,12 +370,17 @@ La contraseña generada se muestra **una sola vez**, al crear el recurso. Guárd
 inmediatamente: queda escrita en el `.env` del recurso pero el panel no la vuelve a
 mostrar ni incorpora un gestor de secretos.
 
-## Imágenes de Docker Hub
+## Imágenes de registry
 
-**Añadir recurso → Imagen de Docker Hub** busca en el registro mientras escribes, ofrece
-las etiquetas disponibles y genera el Compose. La imagen se guarda como `APP_IMAGE` en el
+**Añadir recurso → Imagen de Docker Hub** busca en Docker Hub mientras escribes, pero
+también acepta una referencia exacta de otro registry, por ejemplo
+`ghcr.io/isaul19/storagia:main`. Para imágenes privadas usa antes `docker login` en el
+servidor. La imagen se guarda como `APP_IMAGE` en el
 `.env`, así que el rollback y el deploy por imagen funcionan igual que en un proyecto
 Compose registrado a mano.
+
+Con **Auto Deploy** activo, el watcher ejecuta un pull ligero y compara el digest aplicado;
+solo recrea el servicio cuando aparece una imagen nueva.
 
 La búsqueda la resuelve el servidor con `curl`; el navegador nunca habla con Docker Hub,
 de modo que la CSP del panel sigue siendo `connect-src 'self'`.
@@ -385,46 +390,28 @@ de modo que la CSP del panel sigue siendo `connect-src 'self'`.
 **Añadir recurso → Repositorio de GitHub** necesita conectar antes una GitHub App desde la
 sección **GitHub** del panel:
 
-1. Pulsa **Conectar con GitHub**. El panel envía un manifiesto y GitHub crea la App con
-   los permisos mínimos (`contents: read`, `metadata: read`) y el evento `push`.
-2. GitHub vuelve al panel con un código que se canjea por el App ID, el secreto de webhook
-   y la clave privada. Todo queda en `<TDM_DATA_DIR>/github.json` con permisos `0600`.
+1. Pulsa **Conectar con GitHub**. El panel envía un manifiesto sin webhook ni eventos, con
+   los permisos mínimos (`contents: read`, `metadata: read`).
+2. GitHub vuelve al panel con un código que se canjea por el App ID y la clave privada.
+   Todo queda en `<TDM_DATA_DIR>/github.json` con permisos `0600`.
 3. Pulsa **Instalar en repositorios** y elige todos o solo algunos.
 
 A partir de ahí, crear un recurso desde un repositorio clona la rama elegida en
 `<slug>/repo`, genera un Compose con `build:` y construye la imagen en el servidor. Cada
-`push` a esa rama dispara un redespliegue, validado con HMAC-SHA256 sobre el cuerpo del
-webhook.
+el watcher compara periódicamente el SHA de la rama con el `HEAD` local y redespliega solo
+cuando cambia.
 
 ### Si entras por un túnel SSH o localhost
 
-Son dos direcciones distintas y conviene no confundirlas:
-
-| | Quién la usa | ¿Debe ser pública? |
-| --- | --- | --- |
-| `redirect_url` / `setup_url` | Tu navegador, al volver de GitHub | **No.** `localhost` funciona |
-| `hook_attributes.url` | GitHub, al entregar un `push` | **Sí.** GitHub rechaza direcciones privadas |
-
-Si accedes al panel por `http://localhost:8787` a través de un túnel SSH, el panel lo
-detecta y crea la App **sin webhook**. Todo lo demás funciona igual: listar repositorios,
-clonar, construir y desplegar a mano. Lo único que no tendrás es el redespliegue automático
-al hacer `push`.
-
-Para habilitarlo tienes tres opciones:
-
-1. Escribir tu dominio público en el campo **URL pública del panel** antes de conectar.
-2. Definir `TDM_PUBLIC_URL=https://panel.tudominio.com` en la configuración y reconectar.
-3. Añadir el webhook más tarde en `Settings → Developer settings → GitHub Apps → tu App →
-   Webhook`, apuntando a `https://tu-dominio/hooks/github` con el secreto que GitHub generó.
-
-Sin ninguna de las tres, el panel te lo recuerda en la sección GitHub en vez de fallar en
-silencio.
+Funciona sin configuración adicional. Los callbacks los sigue el navegador y el watcher
+solo realiza conexiones HTTPS salientes a GitHub y a los registries. No necesitas dominio,
+TLS ni publicar el puerto `8787`.
 
 Ten en cuenta que construir imágenes consume CPU y RAM del propio servidor. En máquinas
 muy pequeñas suele salir más barato construir en GitHub Actions y desplegar por imagen.
 
-Si prefieres crear la App a mano, **Ya tengo una GitHub App** acepta App ID, slug, clave
-privada PEM y secreto de webhook.
+Si prefieres crear la App a mano, **Ya tengo una GitHub App** acepta App ID, slug y clave
+privada PEM.
 
 ## Configuración
 
@@ -438,9 +425,9 @@ Archivo predeterminado: `/etc/tinkiva-docker-manager/env`.
 | `TDM_ALLOWED_ROOT` | `/opt/tinkiva/apps` | Única raíz aceptada para Compose y `.env`. |
 | `TDM_DOCKER_BIN` | `docker` | Ruta del Docker CLI. |
 | `TDM_GIT_BIN` | `git` | Ruta de git, usada para los recursos de repositorio. |
-| `TDM_PUBLIC_URL` | sin valor | URL del panel alcanzable **desde internet**. Solo se usa para el webhook de GitHub; los retornos del navegador salen siempre de la cabecera `Host`. Sin ella no hay redespliegue automático en cada `push`. |
 | `TDM_WORKERS` | `2` | Workers HTTP fijos; rango 1–16. |
 | `TDM_MAX_HISTORY` | `200` | Registros conservados; rango 10–10,000. |
+| `TDM_POLL_INTERVAL_SECONDS` | `60` | Intervalo del watcher; rango 30–86,400 segundos. |
 
 Después de editar:
 
@@ -490,11 +477,9 @@ Authorization: Bearer <TDM_ADMIN_TOKEN>
 | `GET` | `/api/github/repositories?installation_id=` | Repositorios accesibles. |
 | `GET` | `/api/github/branches?installation_id=&repository=` | Ramas de un repositorio. |
 | `POST` | `/hooks/deploy/:slug` | Webhook propio con `X-Tinkiva-Token`. |
-| `POST` | `/hooks/github` | Webhook de GitHub, validado con `X-Hub-Signature-256`. |
 
-Los cuerpos de escritura usan `application/x-www-form-urlencoded`, salvo el webhook de
-GitHub, que llega como JSON. El servidor limita las cabeceras a 32 KiB y el cuerpo a
-512 KiB.
+Los cuerpos de escritura usan `application/x-www-form-urlencoded`. El servidor limita las
+cabeceras a 32 KiB y el cuerpo a 512 KiB.
 
 Los retornos del navegador desde GitHub (`/github/callback` y `/github/installed`) no
 llevan cabecera `Authorization` porque son navegaciones, no llamadas de la interfaz; se
@@ -590,12 +575,12 @@ src/
   main.rs                arranque, listener y pool de workers
   app.rs                 enrutado HTTP y reglas de negocio
   http.rs                parser de peticiones y respuestas
-  model.rs / store.rs    dominio y estado persistente (formato TDM2)
+  model.rs / store.rs    dominio y estado persistente (formato TDM3)
   docker.rs / git.rs     integración con los CLI externos
   proc.rs                lanzador de subprocesos con timeout
   net.rs                 cliente HTTPS sobre curl con lista blanca
   json.rs / crypto.rs    parser JSON y SHA-256/HMAC/Base64URL
-  github.rs              GitHub App: manifiesto, JWT, repos y webhooks
+  github.rs              GitHub App: manifiesto, JWT, repos y polling
   registry.rs            búsqueda y etiquetas de Docker Hub
   templates.rs           generadores de Compose por tipo de recurso
   metrics.rs             métricas del host desde /proc y df

@@ -26,6 +26,7 @@ use crate::http::read_request;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 const HELP: &str = "\
 Tinkiva Docker Manager — panel de despliegue Docker de un solo nodo
@@ -136,11 +137,23 @@ fn serve(config: Config) -> Result<(), String> {
             .map_err(|error| format!("no se pudo iniciar worker HTTP: {error}"))?;
     }
 
+    let watcher = Arc::clone(&app);
+    let poll_interval = watcher.config().poll_interval_seconds;
+    thread::Builder::new()
+        .name("tdm-deployment-watcher".to_owned())
+        .stack_size(256 * 1024)
+        .spawn(move || loop {
+            thread::sleep(Duration::from_secs(poll_interval));
+            watcher.poll_deployments();
+        })
+        .map_err(|error| format!("no se pudo iniciar el watcher: {error}"))?;
+
     eprintln!(
-        "Tinkiva Docker Manager {} escuchando en {} con {} workers; raíz permitida: {}",
+        "Tinkiva Docker Manager {} escuchando en {} con {} workers; polling cada {}s; raíz permitida: {}",
         env!("CARGO_PKG_VERSION"),
         bind,
         workers,
+        poll_interval,
         app.config().allowed_root.display()
     );
 

@@ -35,11 +35,9 @@ pub struct Config {
     pub allowed_root: PathBuf,
     pub docker_binary: PathBuf,
     pub git_binary: PathBuf,
-    /// URL pública del panel; solo hace falta si vive detrás de un proxy con
-    /// otro nombre de host, porque GitHub debe poder volver aquí.
-    pub public_url: Option<String>,
     pub workers: usize,
     pub max_history: usize,
+    pub poll_interval_seconds: u64,
 }
 
 impl Config {
@@ -92,10 +90,10 @@ impl Config {
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(200)
             .clamp(10, 10_000);
-        let public_url = setting("TDM_PUBLIC_URL")
-            .map(|value| value.trim().trim_end_matches('/').to_owned())
-            .filter(|value| value.starts_with("http://") || value.starts_with("https://"));
-
+        let poll_interval_seconds = setting("TDM_POLL_INTERVAL_SECONDS")
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(60)
+            .clamp(30, 86_400);
         Ok(Self {
             bind,
             admin_token,
@@ -105,9 +103,9 @@ impl Config {
                 setting("TDM_DOCKER_BIN").unwrap_or_else(|| "docker".to_owned()),
             ),
             git_binary: PathBuf::from(setting("TDM_GIT_BIN").unwrap_or_else(|| "git".to_owned())),
-            public_url,
             workers,
             max_history,
+            poll_interval_seconds,
         })
     }
 }
@@ -167,6 +165,82 @@ impl App {
 
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// Ejecuta una ronda secuencial de polling. Solo conserva un proyecto a la
+    /// vez y delega HTTP/registry a procesos cortos para mantener baja la RAM.
+    pub fn poll_deployments(&self) {
+        let projects = match self.store.projects() {
+            Ok(projects) => projects,
+            Err(error) => {
+                eprintln!("watcher: no se pudieron leer proyectos: {error}");
+                return;
+            }
+        };
+
+        for project in projects.into_iter().filter(|project| project.auto_deploy) {
+            let changed = if project.kind == KIND_REPOSITORY {
+                self.repository_changed(&project)
+            } else if project.kind == KIND_IMAGE {
+                self.registry_image_changed(&project)
+            } else {
+                continue;
+            };
+
+            match changed {
+                Ok(Some(revision)) => {
+                    let trigger = if project.kind == KIND_REPOSITORY {
+                        "github-poll"
+                    } else {
+                        "registry-poll"
+                    };
+                    match self.perform_deploy(
+                        project.clone(),
+                        None,
+                        project.branch.clone(),
+                        (trigger == "github-poll").then_some(revision.clone()),
+                        trigger,
+                    ) {
+                        Ok(outcome) if outcome.success && trigger == "registry-poll" => {
+                            if let Err(error) = self.store.update_source_revision(&project.slug, revision) {
+                                eprintln!("watcher {}: no se guardó el digest: {error}", project.slug);
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            if error.status != 429 {
+                                eprintln!("watcher {}: {}", project.slug, error.message);
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => eprintln!("watcher {}: {error}", project.slug),
+            }
+        }
+    }
+
+    fn repository_changed(&self, project: &Project) -> Result<Option<String>, String> {
+        let repository = project.repository.as_deref().ok_or("falta el repositorio")?;
+        let installation_id = project.installation_id.ok_or("falta installation_id")?;
+        let branch = project.branch.as_deref().unwrap_or("main");
+        let remote = self
+            .github
+            .branch_commit(installation_id, repository, branch)?;
+        Ok((project.source_revision.as_deref() != Some(remote.as_str())).then_some(remote))
+    }
+
+    fn registry_image_changed(&self, project: &Project) -> Result<Option<String>, String> {
+        let image = project.current_image.as_deref().ok_or("falta la imagen")?;
+        let pull = self.docker.pull_image(image)?;
+        if !pull.success {
+            return Err(format!("no se pudo consultar {image}: {}", pull.summary()));
+        }
+        let after = self
+            .docker
+            .image_revision(image)?
+            .ok_or_else(|| format!("Docker no encontró {image} después del pull"))?;
+        Ok((project.source_revision.as_deref() != Some(after.as_str())).then_some(after))
     }
 
     pub fn handle(&self, request: &Request) -> Response {
@@ -285,20 +359,6 @@ impl App {
             "http"
         };
         format!("{scheme}://{host}")
-    }
-
-    /// URL a la que **GitHub** puede llamar para entregar webhooks. Debe ser
-    /// alcanzable desde internet; si no la hay, no se configura webhook y los
-    /// redespliegues automáticos quedan desactivados hasta que se añada uno.
-    ///
-    /// Orden de preferencia: lo que indique el usuario en el formulario,
-    /// `TDM_PUBLIC_URL`, y por último la propia URL del panel si resulta ser pública.
-    fn webhook_base(&self, request: &Request, requested: Option<&str>) -> Option<String> {
-        requested
-            .map(str::to_owned)
-            .or_else(|| self.config.public_url.clone())
-            .or_else(|| Some(self.panel_url(request)))
-            .filter(|url| is_internet_reachable(url))
     }
 
     // ── Información general ────────────────────────────────────────────────
@@ -769,7 +829,11 @@ impl App {
         }
 
         let effective_image = image.clone().or_else(|| previous_image.clone());
-        let command = self.docker.deploy(&project);
+        let command = if trigger == "registry-poll" {
+            self.docker.deploy_pulled(&project)
+        } else {
+            self.docker.deploy(&project)
+        };
         let (success, mut message, command_duration) = match command {
             Ok(result) => (result.success, deployment_message(&result), result.duration_ms),
             Err(error) => (false, error, started.elapsed().as_millis()),
@@ -784,6 +848,18 @@ impl App {
                         format!("deployment aplicado, pero no se guardó su estado: {error}"),
                     )
                 })?;
+            if project.kind == KIND_REPOSITORY {
+                if let Some(revision) = commit.clone() {
+                    self.store
+                        .update_source_revision(&project.slug, revision)
+                        .map_err(|error| {
+                            ApiError::new(
+                                500,
+                                format!("deployment aplicado, pero no se guardó su commit: {error}"),
+                            )
+                        })?;
+                }
+            }
         } else if let Some((env_file, image_env)) = &env_target {
             let restored = match &previous_image {
                 Some(previous) => set_env_value(env_file, image_env, previous),
@@ -888,10 +964,7 @@ impl App {
 
     fn github_status(&self, request: &Request) -> Response {
         let panel_url = self.panel_url(request);
-        let webhook = self
-            .webhook_base(request, None)
-            .map(|base| format!("{base}/hooks/github"));
-        match self.github.status_json(&panel_url, webhook.as_deref()) {
+        match self.github.status_json(&panel_url) {
             Ok(body) => Response::json(200, body),
             Err(error) => json_error(500, &error),
         }
@@ -917,28 +990,7 @@ impl App {
             );
         }
 
-        let fields = match request.form() {
-            Ok(fields) => fields,
-            Err(error) => return json_error(400, &error),
-        };
-        // El usuario puede indicar una URL pública distinta a la del navegador,
-        // típico cuando entra por un túnel SSH pero el panel sí tiene dominio.
-        let requested = optional_field(&fields, "webhook_url").map(|value| {
-            value.trim().trim_end_matches('/').to_owned()
-        });
-        if let Some(url) = &requested {
-            if !is_internet_reachable(url) {
-                return json_error(
-                    422,
-                    "esa URL no es alcanzable desde internet; GitHub rechazaría el manifiesto",
-                );
-            }
-        }
-
         let panel_url = self.panel_url(request);
-        let webhook = self
-            .webhook_base(request, requested.as_deref())
-            .map(|base| format!("{base}/hooks/github"));
 
         let suffix = match random_hex(3) {
             Ok(suffix) => suffix,
@@ -954,15 +1006,12 @@ impl App {
             format!(
                 concat!(
                     "{{\"action\":{},\"manifest\":{},\"state\":{},",
-                    "\"panel_url\":{},\"webhook_url\":{}}}"
+                    "\"panel_url\":{},\"polling\":true}}"
                 ),
                 json_string(&format!("https://github.com/settings/apps/new?state={state}")),
-                json_string(&self.github.manifest(&panel_url, webhook.as_deref(), &suffix)),
+                json_string(&self.github.manifest(&panel_url, &suffix)),
                 json_string(&state),
                 json_string(&panel_url),
-                webhook
-                    .as_deref()
-                    .map_or_else(|| "null".to_owned(), json_string),
             ),
         )
     }
@@ -978,12 +1027,7 @@ impl App {
         };
         let slug = field(&fields, "slug");
         let private_key = field(&fields, "private_key");
-        let webhook_secret = optional_field(&fields, "webhook_secret").unwrap_or_default();
-
-        match self
-            .github
-            .connect_manually(app_id, slug, private_key, webhook_secret)
-        {
+        match self.github.connect_manually(app_id, slug, private_key) {
             Ok(()) => Response::json(201, "{\"ok\":true}".to_owned()),
             Err(error) => json_error(422, &error),
         }
@@ -991,7 +1035,7 @@ impl App {
 
     /// URL de instalación con un nonce fresco para el retorno.
     fn github_install_url(&self) -> Response {
-        let status = match self.github.status_json("", None) {
+        let status = match self.github.status_json("") {
             Ok(status) => status,
             Err(error) => return json_error(500, &error),
         };
@@ -1076,12 +1120,6 @@ impl App {
         let segments = path_segments(&request.path);
 
         match segments.as_slice() {
-            ["hooks", "github"] => {
-                if method != "POST" {
-                    return json_error(405, "el webhook requiere POST");
-                }
-                self.github_webhook(request)
-            }
             ["hooks", "deploy", slug] => {
                 if method != "POST" {
                     return json_error(405, "el webhook requiere POST");
@@ -1103,101 +1141,6 @@ impl App {
             }
             _ => json_error(404, "webhook no encontrado"),
         }
-    }
-
-    fn github_webhook(&self, request: &Request) -> Response {
-        if !self
-            .github
-            .verify_webhook(request.header("x-hub-signature-256"), &request.body)
-        {
-            return json_error(401, "firma de webhook inválida");
-        }
-
-        let event = request.header("x-github-event").unwrap_or_default();
-        if event == "ping" {
-            return Response::json(200, "{\"ok\":true,\"message\":\"pong\"}".to_owned());
-        }
-        if event != "push" {
-            return Response::json(
-                202,
-                format!("{{\"ok\":true,\"ignored\":{}}}", json_string(event)),
-            );
-        }
-
-        let Some(payload) = webhook_payload(request) else {
-            return json_error(400, "no se pudo leer el payload del webhook");
-        };
-        let document = match Json::parse(&payload) {
-            Ok(document) => document,
-            Err(error) => return json_error(400, &format!("payload inválido: {error}")),
-        };
-
-        let Some(repository) = document
-            .get("repository")
-            .and_then(|repository| repository.string("full_name"))
-        else {
-            return json_error(400, "el payload no indica el repositorio");
-        };
-        let Some(branch) = document
-            .string("ref")
-            .and_then(|reference| reference.strip_prefix("refs/heads/"))
-        else {
-            return Response::json(
-                202,
-                "{\"ok\":true,\"ignored\":\"no es un push a una rama\"}".to_owned(),
-            );
-        };
-        let commit = document
-            .string("after")
-            .filter(|commit| valid_commit(commit))
-            .map(|commit| commit[..12.min(commit.len())].to_owned());
-
-        let projects = match self.store.projects() {
-            Ok(projects) => projects,
-            Err(error) => return json_error(500, &error),
-        };
-        let targets: Vec<Project> = projects
-            .into_iter()
-            .filter(|project| {
-                project.repository.as_deref() == Some(repository)
-                    && project.branch.as_deref().unwrap_or("main") == branch
-            })
-            .collect();
-
-        if targets.is_empty() {
-            return Response::json(
-                202,
-                "{\"ok\":true,\"ignored\":\"ningún proyecto escucha ese repositorio y rama\"}"
-                    .to_owned(),
-            );
-        }
-
-        let mut results = Vec::new();
-        for project in targets {
-            let slug = project.slug.clone();
-            let outcome = self.perform_deploy(
-                project,
-                None,
-                Some(branch.to_owned()),
-                commit.clone(),
-                "webhook",
-            );
-            results.push(match outcome {
-                Ok(outcome) => format!(
-                    "{{\"project\":{},\"ok\":{},\"deployment\":{}}}",
-                    json_string(&slug),
-                    outcome.success,
-                    outcome.deployment.to_json()
-                ),
-                Err(error) => format!(
-                    "{{\"project\":{},\"ok\":false,\"error\":{}}}",
-                    json_string(&slug),
-                    json_string(&error.message)
-                ),
-            });
-        }
-
-        Response::json(200, format!("{{\"results\":[{}]}}", results.join(",")))
     }
 
     // ── Alta de recursos ───────────────────────────────────────────────────
@@ -1293,6 +1236,7 @@ impl App {
                 branch: None,
                 image_env: None,
                 current_image: Some(generated.image.clone()),
+                auto_deploy: false,
                 generated,
             },
             Some(&password),
@@ -1371,6 +1315,7 @@ impl App {
                 // Con la imagen en `.env` el rollback funciona igual que en Compose.
                 image_env: Some("APP_IMAGE".to_owned()),
                 current_image: Some(image.to_owned()),
+                auto_deploy: field(&fields, "auto_deploy") != "false",
                 generated,
             },
             None,
@@ -1500,6 +1445,7 @@ impl App {
                 branch: Some(branch.to_owned()),
                 image_env: None,
                 current_image: Some(generated.image.clone()),
+                auto_deploy: field(&fields, "auto_deploy") != "false",
                 generated,
             },
             None,
@@ -1578,6 +1524,8 @@ impl App {
             engine: resource.engine,
             repository: resource.repository,
             installation_id: resource.installation_id,
+            auto_deploy: resource.auto_deploy,
+            source_revision: None,
         };
         if let Err(error) = self.store.add_project(project.clone()) {
             return abort(error, 409);
@@ -1605,6 +1553,14 @@ impl App {
                 );
             }
         };
+
+        if outcome.success && project.kind == KIND_IMAGE {
+            if let Some(image) = project.current_image.as_deref() {
+                if let Ok(Some(revision)) = self.docker.image_revision(image) {
+                    let _ = self.store.update_source_revision(&project.slug, revision);
+                }
+            }
+        }
 
         Response::json(
             if outcome.success { 201 } else { 502 },
@@ -1644,6 +1600,7 @@ struct NewResource {
     branch: Option<String>,
     image_env: Option<String>,
     current_image: Option<String>,
+    auto_deploy: bool,
     generated: GeneratedResource,
 }
 
@@ -1721,76 +1678,12 @@ fn parse_environment(raw: &str) -> Result<Vec<(String, String)>, String> {
     Ok(pairs)
 }
 
-/// Payload del webhook de GitHub, ya venga como JSON o como formulario.
-fn webhook_payload(request: &Request) -> Option<String> {
-    let content_type = request.header("content-type").unwrap_or_default();
-    if content_type.starts_with("application/x-www-form-urlencoded") {
-        return request.form().ok()?.get("payload").cloned();
-    }
-    String::from_utf8(request.body.clone()).ok()
-}
-
 fn valid_host(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 255
         && value.bytes().all(|byte| {
             byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':' | b'[' | b']')
         })
-}
-
-/// ¿Puede GitHub llamar a esta URL desde internet?
-///
-/// GitHub rechaza el manifiesto completo si el webhook apunta a una dirección
-/// privada, así que conviene detectarlo antes de enviarlo y no después.
-fn is_internet_reachable(url: &str) -> bool {
-    let Some(rest) = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-    else {
-        return false;
-    };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    if authority.is_empty() || authority.contains('@') {
-        return false;
-    }
-
-    // Separa el puerto respetando la notación IPv6 `[::1]:8787`.
-    let host = match authority.strip_prefix('[') {
-        Some(tail) => tail.split(']').next().unwrap_or_default(),
-        None => authority.split(':').next().unwrap_or_default(),
-    };
-    let host = host.to_ascii_lowercase();
-    if host.is_empty() {
-        return false;
-    }
-
-    if host == "localhost"
-        || host.ends_with(".localhost")
-        || host.ends_with(".local")
-        || host.ends_with(".internal")
-        || host.ends_with(".home")
-        || host.ends_with(".lan")
-        || host == "::1"
-        || host == "0.0.0.0"
-    {
-        return false;
-    }
-
-    // Rangos privados de IPv4 y direcciones locales de IPv6.
-    let octets: Vec<Option<u8>> = host.split('.').map(|part| part.parse::<u8>().ok()).collect();
-    if octets.len() == 4 && octets.iter().all(Option::is_some) {
-        let octets: Vec<u8> = octets.into_iter().flatten().collect();
-        return !matches!(
-            (octets[0], octets[1]),
-            (127, _) | (10, _) | (192, 168) | (169, 254) | (172, 16..=31)
-        );
-    }
-    if host.starts_with("fe80:") || host.starts_with("fc") || host.starts_with("fd") {
-        return false;
-    }
-
-    // Un nombre sin punto no es resoluble públicamente (p. ej. `mi-servidor`).
-    host.contains('.')
 }
 
 fn valid_branch(value: &str) -> bool {
@@ -1930,30 +1823,6 @@ mod tests {
         assert!(parse_environment("SIN_IGUAL").is_err());
         assert!(parse_environment("APP_IMAGE=otra:1").is_err());
         assert!(parse_environment("TDM_MEMORY_LIMIT=99g").is_err());
-    }
-
-    #[test]
-    fn private_urls_are_not_offered_to_github_as_webhooks() {
-        // Casos que provocaban «Hook url is not supported because it isn't
-        // reachable over the public Internet».
-        assert!(!is_internet_reachable("http://localhost:8787"));
-        assert!(!is_internet_reachable("http://127.0.0.1:8787"));
-        assert!(!is_internet_reachable("http://[::1]:8787"));
-        assert!(!is_internet_reachable("http://192.168.1.50:8787"));
-        assert!(!is_internet_reachable("http://10.0.0.4"));
-        assert!(!is_internet_reachable("http://172.16.0.1"));
-        assert!(!is_internet_reachable("http://172.31.255.254"));
-        assert!(!is_internet_reachable("http://169.254.169.254"));
-        assert!(!is_internet_reachable("http://panel.local"));
-        assert!(!is_internet_reachable("http://mi-servidor"));
-        assert!(!is_internet_reachable("ftp://panel.example.com"));
-        assert!(!is_internet_reachable(""));
-
-        assert!(is_internet_reachable("https://panel.example.com"));
-        assert!(is_internet_reachable("https://panel.example.com:8443"));
-        assert!(is_internet_reachable("http://203.0.113.10"));
-        // 172.32 ya está fuera del rango privado 172.16–172.31.
-        assert!(is_internet_reachable("http://172.32.0.1"));
     }
 
     #[test]

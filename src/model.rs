@@ -27,6 +27,10 @@ pub struct Project {
     pub repository: Option<String>,
     /// Instalación de la GitHub App que da acceso al repositorio.
     pub installation_id: Option<u64>,
+    /// El watcher saliente puede redesplegar este proyecto.
+    pub auto_deploy: bool,
+    /// Último SHA o digest aplicado correctamente por el watcher.
+    pub source_revision: Option<String>,
 }
 
 impl Project {
@@ -52,6 +56,8 @@ impl Project {
             engine: None,
             repository: None,
             installation_id: None,
+            auto_deploy: false,
+            source_revision: None,
         }
     }
 
@@ -86,7 +92,9 @@ impl Project {
                 "\"kind\":{},",
                 "\"engine\":{},",
                 "\"repository\":{},",
-                "\"installation_id\":{}",
+                "\"installation_id\":{},",
+                "\"auto_deploy\":{},",
+                "\"source_revision\":{}",
                 "}}"
             ),
             json_string(&self.slug),
@@ -103,6 +111,8 @@ impl Project {
             json_optional(self.repository.as_deref()),
             self.installation_id
                 .map_or_else(|| "null".to_owned(), |id| id.to_string()),
+            self.auto_deploy,
+            json_optional(self.source_revision.as_deref()),
         )
     }
 }

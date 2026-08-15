@@ -140,8 +140,9 @@ grep -q '"127.0.0.1:8099:80"' "$TMP/apps/demo-proxy/compose.yaml"
 
 # Sin GitHub App conectada el estado debe decirlo sin romperse.
 curl -fsS "${AUTH[@]}" "$BASE/api/github" | jq -e '.connected == false' >/dev/null
+# El webhook entrante de GitHub se retiró: el auto-deploy es por polling saliente.
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/hooks/github" \
-  -H 'X-GitHub-Event: push' -H 'Content-Type: application/json' --data '{}')" == '401' ]]
+  -H 'X-GitHub-Event: push' -H 'Content-Type: application/json' --data '{}')" == '404' ]]
 
 # El borrado completo se lleva contenedores y archivos del recurso.
 curl -fsS "${AUTH[@]}" -X DELETE "$BASE/api/projects/demo-redis?remove=all" | jq -e '.ok == true' >/dev/null

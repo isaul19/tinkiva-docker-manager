@@ -26,6 +26,7 @@ export function RepositoryForm({ onCreated }) {
     published_port: '',
     memory_mb: '512',
     environment: '',
+    auto_deploy: true,
   });
 
   const installations = useAsync(() => api.get('/api/github/installations'), []);
@@ -252,6 +253,17 @@ export function RepositoryForm({ onCreated }) {
         El primer despliegue clona el repositorio y construye la imagen en el servidor; en máquinas
         pequeñas puede tardar varios minutos.
       </p>
+
+      <label class="inline-field checkbox">
+        <input
+          type="checkbox"
+          checked={form.auto_deploy}
+          onChange={(event) =>
+            setForm((current) => ({ ...current, auto_deploy: event.currentTarget.checked }))
+          }
+        />
+        Auto Deploy por polling de GitHub
+      </label>
 
       <div class="form-actions">
         <Button variant="primary" type="submit" loading={busy}>

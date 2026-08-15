@@ -4,16 +4,16 @@
 //!   1. el panel genera un *manifest* y envía al navegador a
 //!      `github.com/settings/apps/new`, donde GitHub crea la App por ti;
 //!   2. GitHub vuelve a `/github/callback?code=…` y el panel canjea ese código
-//!      por las credenciales definitivas (App ID, secreto de webhook y clave privada);
+//!      por las credenciales definitivas (App ID y clave privada);
 //!   3. el panel te lleva a `github.com/apps/<slug>/installations/new` para elegir
 //!      todos los repositorios o solo algunos;
 //!   4. a partir de ahí el panel firma JWT RS256 y pide tokens de instalación
-//!      para listar repositorios, clonar y recibir webhooks de `push`.
+//!      para listar repositorios, clonar y consultar commits por polling.
 //!
 //! Los redirect vienen del navegador y por tanto no llevan la cabecera
 //! `Authorization`; se validan con un *nonce* de un solo uso emitido por el panel.
 
-use crate::crypto::{base64_url, constant_time_eq_bytes, hex, hmac_sha256, rs256_sign};
+use crate::crypto::{base64_url, constant_time_eq_bytes, rs256_sign};
 use crate::json::Json;
 use crate::net::{fetch, Outbound};
 use crate::util::{atomic_write, json_string, now_unix, random_hex};
@@ -152,38 +152,24 @@ impl GitHub {
     ///
     /// `panel_url` es la dirección con la que **el navegador** ve el panel, así que
     /// puede ser `localhost` sin problema: los redirect los hace el propio navegador.
-    /// `webhook_url` en cambio lo llama **GitHub**, y GitHub rechaza el manifiesto
-    /// entero si no es alcanzable desde internet. Cuando no hay una URL pública se
-    /// omite `hook_attributes` y la App se crea sin webhook; se puede añadir después
-    /// desde los ajustes de la App en GitHub.
-    pub fn manifest(&self, panel_url: &str, webhook_url: Option<&str>, suffix: &str) -> String {
-        let hook = webhook_url.map_or_else(String::new, |url| {
-            format!(
-                "\"hook_attributes\":{{\"url\":{},\"active\":true}},",
-                json_string(url)
-            )
-        });
-
+    /// No se solicita webhook ni eventos: el watcher consulta la API desde el servidor.
+    pub fn manifest(&self, panel_url: &str, suffix: &str) -> String {
         format!(
             concat!(
                 "{{",
                 "\"name\":{},",
-                "\"url\":{},",
-                "{}",
+                "\"url\":\"https://github.com/isaul19/tinkiva-docker-manager\",",
                 "\"redirect_url\":{},",
                 "\"setup_url\":{},",
                 "\"callback_urls\":[{}],",
                 "\"setup_on_update\":true,",
                 "\"public\":false,",
-                "\"default_events\":[\"push\"],",
                 "\"default_permissions\":{{",
-                "\"contents\":\"read\",\"metadata\":\"read\",\"pull_requests\":\"read\"",
+                "\"contents\":\"read\",\"metadata\":\"read\"",
                 "}}",
                 "}}"
             ),
             json_string(&format!("Tinkiva DM {suffix}")),
-            json_string(panel_url),
-            hook,
             json_string(&format!("{panel_url}/github/callback")),
             json_string(&format!("{panel_url}/github/installed")),
             json_string(&format!("{panel_url}/github/callback")),
@@ -242,7 +228,6 @@ impl GitHub {
         app_id: u64,
         slug: &str,
         private_key: &str,
-        webhook_secret: &str,
     ) -> Result<(), String> {
         if app_id == 0 {
             return Err("App ID inválido".to_owned());
@@ -260,7 +245,7 @@ impl GitHub {
             name: slug.to_owned(),
             client_id: String::new(),
             client_secret: String::new(),
-            webhook_secret: webhook_secret.to_owned(),
+            webhook_secret: String::new(),
             private_key: private_key.to_owned(),
             html_url: format!("https://github.com/apps/{slug}"),
             connected_at: now_unix(),
@@ -441,30 +426,36 @@ impl GitHub {
         Ok(format!("[{}]", entries.join(",")))
     }
 
-    // ── Webhooks ───────────────────────────────────────────────────────────
-
-    /// Verifica la cabecera `X-Hub-Signature-256` sobre el cuerpo crudo.
-    pub fn verify_webhook(&self, signature_header: Option<&str>, body: &[u8]) -> bool {
-        let Ok(Some(credentials)) = self.credentials() else {
-            return false;
-        };
-        if credentials.webhook_secret.is_empty() {
-            return false;
+    /// Devuelve la revisión actual de una rama para el watcher saliente.
+    pub fn branch_commit(
+        &self,
+        installation_id: u64,
+        repository: &str,
+        branch: &str,
+    ) -> Result<String, String> {
+        if !valid_repository(repository)
+            || branch.is_empty()
+            || branch.len() > 255
+            || branch.chars().any(char::is_whitespace)
+        {
+            return Err("repositorio o rama inválidos".to_owned());
         }
-        let Some(signature) = signature_header.and_then(|value| value.strip_prefix("sha256=")) else {
-            return false;
-        };
-        let expected = hex(&hmac_sha256(credentials.webhook_secret.as_bytes(), body));
-        constant_time_eq_bytes(expected.as_bytes(), signature.as_bytes())
+        let token = self.installation_token(installation_id)?;
+        let document = self.api_get(
+            format!("https://api.github.com/repos/{repository}/commits/{branch}"),
+            &token,
+        )?;
+        document
+            .string("sha")
+            .filter(|sha| sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .map(str::to_owned)
+            .ok_or_else(|| "GitHub no devolvió un commit válido".to_owned())
     }
 
+    // ── Webhooks ───────────────────────────────────────────────────────────
+
     /// Estado que consume la interfaz. Nunca incluye secretos.
-    pub fn status_json(
-        &self,
-        panel_url: &str,
-        webhook_url: Option<&str>,
-    ) -> Result<String, String> {
-        let webhook = webhook_url.map_or_else(|| "null".to_owned(), json_string);
+    pub fn status_json(&self, panel_url: &str) -> Result<String, String> {
         let credentials = self.credentials()?;
 
         Ok(match credentials {
@@ -472,7 +463,7 @@ impl GitHub {
                 concat!(
                     "{{\"connected\":true,\"app_id\":{},\"slug\":{},\"name\":{},",
                     "\"html_url\":{},\"install_url\":{},\"connected_at\":{},",
-                    "\"panel_url\":{},\"webhook_url\":{},\"settings_url\":{}}}"
+                    "\"panel_url\":{},\"polling\":true,\"settings_url\":{}}}"
                 ),
                 credentials.app_id,
                 json_string(&credentials.slug),
@@ -484,16 +475,14 @@ impl GitHub {
                 )),
                 credentials.connected_at,
                 json_string(panel_url),
-                webhook,
                 json_string(&format!(
                     "https://github.com/settings/apps/{}",
                     credentials.slug
                 )),
             ),
             None => format!(
-                "{{\"connected\":false,\"panel_url\":{},\"webhook_url\":{}}}",
-                json_string(panel_url),
-                webhook
+                "{{\"connected\":false,\"panel_url\":{},\"polling\":true}}",
+                json_string(panel_url)
             ),
         })
     }
@@ -590,11 +579,7 @@ mod tests {
     #[test]
     fn manifest_points_every_callback_at_the_panel() {
         let github = instance();
-        let manifest = github.manifest(
-            "https://panel.example.com",
-            Some("https://panel.example.com/hooks/github"),
-            "abc123",
-        );
+        let manifest = github.manifest("https://panel.example.com", "abc123");
         let parsed = Json::parse(&manifest).unwrap();
         assert_eq!(parsed.string("name"), Some("Tinkiva DM abc123"));
         assert_eq!(
@@ -605,21 +590,16 @@ mod tests {
             parsed.string("setup_url"),
             Some("https://panel.example.com/github/installed")
         );
-        assert_eq!(
-            parsed
-                .get("hook_attributes")
-                .and_then(|hook| hook.string("url")),
-            Some("https://panel.example.com/hooks/github")
-        );
+        assert!(parsed.get("hook_attributes").is_none());
+        assert!(parsed.get("default_events").is_none());
         assert_eq!(parsed.get("public").and_then(Json::as_bool), Some(false));
     }
 
     #[test]
     fn manifest_omits_the_hook_when_the_panel_is_not_public() {
-        // GitHub rechaza el manifiesto entero si el webhook apunta a localhost,
-        // así que sin URL pública la App se crea sin webhook.
+        // Los callbacks vuelven mediante el navegador, por eso localhost es válido.
         let github = instance();
-        let manifest = github.manifest("http://localhost:8787", None, "abc123");
+        let manifest = github.manifest("http://localhost:8787", "abc123");
         let parsed = Json::parse(&manifest).unwrap();
 
         assert!(parsed.get("hook_attributes").is_none());
@@ -667,37 +647,12 @@ mod tests {
             })
             .unwrap();
 
-        let status = github.status_json("http://127.0.0.1:8787", None).unwrap();
+        let status = github.status_json("http://127.0.0.1:8787").unwrap();
         assert!(status.contains("\"connected\":true"));
         assert!(status.contains("https://github.com/apps/demo/installations/new"));
         assert!(!status.contains("super-secreto"));
         assert!(!status.contains("otro-secreto"));
         assert!(!status.contains("PRIVATE KEY"));
-        github.disconnect().unwrap();
-    }
-
-    #[test]
-    fn webhook_signature_must_match_the_stored_secret() {
-        let github = instance();
-        github
-            .persist(AppCredentials {
-                app_id: 1,
-                slug: "demo".to_owned(),
-                webhook_secret: "It's a Secret to Everybody".to_owned(),
-                ..AppCredentials::default()
-            })
-            .unwrap();
-
-        let body = b"Hello, World!";
-        let expected = hex(&hmac_sha256(b"It's a Secret to Everybody", body));
-        assert_eq!(
-            expected,
-            "757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17"
-        );
-        assert!(github.verify_webhook(Some(&format!("sha256={expected}")), body));
-        assert!(!github.verify_webhook(Some(&format!("sha256={expected}")), b"otro cuerpo"));
-        assert!(!github.verify_webhook(None, body));
-        assert!(!github.verify_webhook(Some("sha1=abc"), body));
         github.disconnect().unwrap();
     }
 

@@ -320,6 +320,53 @@ impl DockerClient {
         Ok(up)
     }
 
+    /// Digest inmutable del registry (o ID local como fallback), si la imagen existe.
+    pub fn image_revision(&self, image: &str) -> Result<Option<String>, String> {
+        let result = self.run(
+            [
+                "image",
+                "inspect",
+                "--format",
+                "{{range .RepoDigests}}{{println .}}{{end}}",
+                image,
+            ],
+            None,
+            Duration::from_secs(20),
+        )?;
+        if !result.success {
+            return Ok(None);
+        }
+        if let Some(digest) = result
+            .stdout
+            .split_whitespace()
+            .find_map(|entry| entry.split_once('@').map(|(_, digest)| digest.to_owned()))
+        {
+            return Ok(Some(digest));
+        }
+        let fallback = self.run(
+            ["image", "inspect", "--format", "{{.Id}}", image],
+            None,
+            Duration::from_secs(20),
+        )?;
+        Ok(fallback.success.then(|| fallback.stdout.trim().to_owned()).filter(|id| !id.is_empty()))
+    }
+
+    /// Actualiza la caché local desde el registry. Docker reutiliza capas y
+    /// credenciales existentes, sin mantener otro cliente residente en memoria.
+    pub fn pull_image(&self, image: &str) -> Result<CommandResult, String> {
+        self.run(["pull", "--quiet", image], None, Duration::from_secs(600))
+    }
+
+    /// Aplica una imagen que el watcher ya descargó, evitando un segundo pull.
+    pub fn deploy_pulled(&self, project: &Project) -> Result<CommandResult, String> {
+        let compose = project.compose_file.to_string_lossy().into_owned();
+        self.run(
+            ["compose", "-f", &compose, "up", "-d", "--remove-orphans"],
+            project.compose_file.parent(),
+            Duration::from_secs(300),
+        )
+    }
+
     /// Detiene y elimina el stack. `remove_volumes` borra también los datos, por
     /// lo que el panel solo lo pide con confirmación explícita del usuario.
     pub fn compose_down(

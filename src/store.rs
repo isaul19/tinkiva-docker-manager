@@ -86,6 +86,17 @@ impl Store {
         self.save_locked(&state)
     }
 
+    pub fn update_source_revision(&self, slug: &str, revision: String) -> Result<(), String> {
+        let mut state = self.lock()?;
+        let project = state
+            .projects
+            .iter_mut()
+            .find(|project| project.slug == slug)
+            .ok_or_else(|| "proyecto no encontrado".to_owned())?;
+        project.source_revision = Some(revision);
+        self.save_locked(&state)
+    }
+
     pub fn append_deployment(&self, mut deployment: Deployment) -> Result<Deployment, String> {
         let mut state = self.lock()?;
         deployment.id = state.next_deployment_id;
@@ -144,7 +155,7 @@ impl Store {
 }
 
 fn serialize_state(state: &PersistedState) -> String {
-    let mut output = format!("TDM2\t{}\n", state.next_deployment_id);
+    let mut output = format!("TDM3\t{}\n", state.next_deployment_id);
 
     for project in &state.projects {
         let fields = [
@@ -170,6 +181,8 @@ fn serialize_state(state: &PersistedState) -> String {
             project
                 .installation_id
                 .map_or_else(String::new, |id| id.to_string()),
+            project.auto_deploy.to_string(),
+            encode_field(project.source_revision.as_deref().unwrap_or_default()),
         ];
         output.push_str(&fields.join("\t"));
         output.push('\n');
@@ -203,7 +216,7 @@ fn parse_state(contents: &str) -> Result<PersistedState, String> {
     let mut header_fields = header.split('\t');
     // TDM1 no tenía tipo de proyecto ni origen GitHub; se sigue leyendo tal cual
     // y se reescribe como TDM2 en el primer guardado.
-    if !matches!(header_fields.next(), Some("TDM1" | "TDM2")) {
+    if !matches!(header_fields.next(), Some("TDM1" | "TDM2" | "TDM3")) {
         return Err("formato de estado no reconocido".to_owned());
     }
     let next_deployment_id = header_fields
@@ -242,10 +255,10 @@ fn parse_state(contents: &str) -> Result<PersistedState, String> {
 }
 
 fn parse_project(fields: &[&str]) -> Result<Project, String> {
-    // 10 campos = formato TDM1; 14 = TDM2 con tipo de recurso y origen GitHub.
-    if fields.len() != 10 && fields.len() != 14 {
+    // TDM1 tenía 10 campos, TDM2 14 y TDM3 añade auto-deploy.
+    if fields.len() != 10 && fields.len() != 14 && fields.len() != 15 && fields.len() != 16 {
         return Err(format!(
-            "proyecto con {} campos; se esperaban 10 o 14",
+            "proyecto con {} campos; se esperaban 10, 14, 15 o 16",
             fields.len()
         ));
     }
@@ -280,6 +293,15 @@ fn parse_project(fields: &[&str]) -> Result<Project, String> {
                     .map_err(|_| "installation_id inválido".to_owned())?,
             ),
             _ => None,
+        },
+        auto_deploy: match fields.get(14).map(|raw| raw.trim()) {
+            Some("true") => true,
+            Some("false") | None => fields.len() == 14 && fields.get(12).is_some_and(|value| !value.is_empty()),
+            Some(_) => return Err("auto_deploy inválido".to_owned()),
+        },
+        source_revision: match fields.get(15) {
+            Some(raw) => optional_string(raw)?,
+            None => None,
         },
     })
 }
@@ -344,6 +366,8 @@ mod tests {
                 engine: None,
                 repository: Some("isaul19/demo".to_owned()),
                 installation_id: Some(4242),
+                auto_deploy: true,
+                source_revision: Some("sha256:abc".to_owned()),
             }],
             deployments: vec![Deployment {
                 id: 8,
