@@ -5,10 +5,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const DEFAULT_CONFIG_DIR: &str = "tinkiva";
 const DEFAULT_CONFIG_FILE: &str = "tinkiva.env";
 const SYSTEM_CONFIG_FILE: &str = "/etc/tinkiva-docker-manager/env";
-const DEFAULT_DATA_DIR: &str = "./tinkiva/data";
-const DEFAULT_ALLOWED_ROOT: &str = "./tinkiva/apps";
 const DEFAULT_PORT: u16 = 8787;
 const DEFAULT_UPDATE_REPO: &str = "isaul19/tinkiva-docker-manager";
 
@@ -32,15 +31,31 @@ pub fn config_path() -> PathBuf {
     if let Ok(path) = std::env::var("TDM_CONFIG_FILE") {
         return PathBuf::from(path);
     }
-    let local = PathBuf::from(DEFAULT_CONFIG_FILE);
-    if local.exists() {
-        return local;
-    }
     let system = PathBuf::from(SYSTEM_CONFIG_FILE);
     if system.exists() {
         return system;
     }
+    let local = PathBuf::from(DEFAULT_CONFIG_DIR).join(DEFAULT_CONFIG_FILE);
+    if local.exists() {
+        return local;
+    }
+    let legacy = PathBuf::from(DEFAULT_CONFIG_FILE);
+    if legacy.exists() {
+        return legacy;
+    }
     local
+}
+
+pub fn state_root() -> PathBuf {
+    let parent = config_path()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    if parent.starts_with("/etc") {
+        PathBuf::from(DEFAULT_CONFIG_DIR)
+    } else {
+        parent
+    }
 }
 
 pub fn read_config_file() -> Option<HashMap<String, String>> {
@@ -111,10 +126,11 @@ pub fn run_wizard(current: Option<&HashMap<String, String>>) -> Result<(), Strin
     let admin_token = ask_token(&mut reader, current_token)?;
 
     println!();
+    let root = state_root();
     let default_data_dir = current
         .and_then(|settings| settings.get("TDM_DATA_DIR"))
         .cloned()
-        .unwrap_or_else(|| DEFAULT_DATA_DIR.to_owned());
+        .unwrap_or_else(|| root.join("data").display().to_string());
     let data_dir = ask_path(
         &mut reader,
         "Directorio de datos (estado local)",
@@ -123,7 +139,7 @@ pub fn run_wizard(current: Option<&HashMap<String, String>>) -> Result<(), Strin
     let default_allowed_root = current
         .and_then(|settings| settings.get("TDM_ALLOWED_ROOT"))
         .cloned()
-        .unwrap_or_else(|| DEFAULT_ALLOWED_ROOT.to_owned());
+        .unwrap_or_else(|| root.join("apps").display().to_string());
     let allowed_root = ask_path(
         &mut reader,
         "Raíz permitida para apps Compose",

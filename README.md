@@ -132,14 +132,14 @@ Si ya existe configuración, ejecutar `tinkivadm` a secas muestra un menú: inic
 | Comando | Uso |
 |---|---|
 | `tinkivadm` | Menú interactivo con config existente; primer plano en el primer uso. |
-| `tinkivadm start` | Arranca el panel en segundo plano (asistente si no hay config). Logs en `tinkiva.log`. |
+| `tinkivadm start` | Arranca el panel en segundo plano (asistente si no hay config). Logs en `tinkiva/tinkiva.log`. |
 | `tinkivadm stop` | Detiene la instancia en segundo plano (SIGTERM; fuerza `-9` si no baja). |
 | `tinkivadm status` | Muestra si está en ejecución, el pid y la URL del panel. |
 | `tinkivadm config` | Reejecuta el asistente; tus valores actuales se ofrecen como default. |
 | `tinkivadm update [versión]` | Descarga una release de GitHub, verifica sha256 y se reemplaza. |
 | `tinkivadm version` | Imprime la versión actual. |
 
-Sin systemd, el binario gestiona su propio demonio con `tinkiva.pid` y `tinkiva.log` junto al archivo de configuración.
+Sin systemd, el binario gestiona su propio demonio. Todo vive dentro de `tinkiva/` en el directorio donde lo ejecutes: `tinkiva/tinkiva.env` (config), `tinkiva/tinkiva.pid` (proceso) y `tinkiva/tinkiva.log` (salida), junto a `tinkiva/data` y `tinkiva/apps`.
 
 ### Servicio systemd (Opción B2)
 
@@ -449,7 +449,7 @@ Instalación directa del binario (Opción A / B1):
 ```bash
 tinkivadm stop
 sudo rm /usr/local/bin/tinkivadm
-rm tinkiva.env tinkiva.pid tinkiva.log   # y el directorio de datos si quieres
+rm -rf tinkiva   # config, pid, log, datos y apps (¡revisa antes de borrar!)
 ```
 
 `/opt/tinkiva/apps` nunca se borra automáticamente para proteger tus proyectos y datos.

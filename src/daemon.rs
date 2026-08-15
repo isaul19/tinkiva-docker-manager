@@ -9,10 +9,7 @@ use std::time::Duration;
 const SERVE_FLAG: &str = "__serve";
 
 fn state_dir() -> PathBuf {
-    setup::config_path()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
+    crate::setup::state_root()
 }
 
 pub fn pid_file() -> PathBuf {
@@ -111,16 +108,26 @@ pub fn start() -> Result<(), String> {
                     println!("  Panel: http://{bind}");
                 }
                 println!("  Logs:  {}", log_file().display());
-                println!("  Detén el proceso con: {} stop", executable.display());
+                println!("  Detén el proceso con: tinkivadm stop");
                 return Ok(());
             }
             break;
         }
     }
     Err(format!(
-        "la instancia no llegó a arrancar; revisa {}",
+        "la instancia no llegó a arrancar. Última línea del log: {} (revisa {})",
+        last_log_line().unwrap_or_else(|| "sin salida".to_owned()),
         log_file().display()
     ))
+}
+
+fn last_log_line() -> Option<String> {
+    let contents = fs::read_to_string(log_file()).ok()?;
+    contents
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(str::to_owned)
 }
 
 fn current_bind() -> Option<String> {
