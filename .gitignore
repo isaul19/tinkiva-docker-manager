@@ -7,6 +7,7 @@
 .env
 tinkiva.env
 /tinkiva/
+/tinkiva-docker-manager/
 tinkiva.pid
 tinkiva.log
 state.db

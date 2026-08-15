@@ -35,10 +35,13 @@ Comandos:
   help             Muestra esta ayuda
 
 Sin comando abre el menú interactivo (o el asistente la primera vez).
-El estado local vive en ./tinkiva/ — config, pid, log, datos y apps.";
+El estado local vive en ./tinkiva-docker-manager/ — config, pid, log, datos y apps.";
 
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.first().map(String::as_str) != Some("__serve") {
+        setup::migrate_legacy_state();
+    }
     let first = arguments.first();
     let outcome = match first.map(String::as_str) {
         Some("__serve") => serve_with_pidfile(),

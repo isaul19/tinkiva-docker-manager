@@ -5,8 +5,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const DEFAULT_CONFIG_DIR: &str = "tinkiva";
+const DEFAULT_CONFIG_DIR: &str = "tinkiva-docker-manager";
 const DEFAULT_CONFIG_FILE: &str = "tinkiva.env";
+const LEGACY_STATE_DIR: &str = "tinkiva";
 const SYSTEM_CONFIG_FILE: &str = "/etc/tinkiva-docker-manager/env";
 const DEFAULT_PORT: u16 = 8787;
 const DEFAULT_UPDATE_REPO: &str = "isaul19/tinkiva-docker-manager";
@@ -39,11 +40,36 @@ pub fn config_path() -> PathBuf {
     if local.exists() {
         return local;
     }
+    let legacy_dir = PathBuf::from(LEGACY_STATE_DIR).join(DEFAULT_CONFIG_FILE);
+    if legacy_dir.exists() {
+        return legacy_dir;
+    }
     let legacy = PathBuf::from(DEFAULT_CONFIG_FILE);
     if legacy.exists() {
         return legacy;
     }
     local
+}
+
+pub fn migrate_legacy_state() {
+    let legacy_pid = PathBuf::from("tinkiva.pid");
+    if legacy_pid.exists() {
+        let _ = std::fs::remove_file(&legacy_pid);
+    }
+
+    let legacy_dir = PathBuf::from(LEGACY_STATE_DIR);
+    let new_dir = PathBuf::from(DEFAULT_CONFIG_DIR);
+    if !legacy_dir.exists() || new_dir.exists() {
+        return;
+    }
+    if let Ok(contents) = std::fs::read_to_string(legacy_dir.join("tinkiva.pid")) {
+        if let Ok(pid) = contents.trim().parse::<u32>() {
+            if Path::new(&format!("/proc/{pid}")).exists() {
+                return;
+            }
+        }
+    }
+    let _ = std::fs::rename(&legacy_dir, &new_dir);
 }
 
 pub fn state_root() -> PathBuf {
@@ -178,6 +204,47 @@ pub fn run_wizard(current: Option<&HashMap<String, String>>) -> Result<(), Strin
         println!("  Guárdalo ahora: no se volverá a mostrar completo en pantalla.");
     }
     println!();
+    cleanup_install_residuals(&mut reader)?;
+    Ok(())
+}
+
+fn cleanup_install_residuals(reader: &mut io::StdinLock) -> Result<(), String> {
+    let cwd = std::env::current_dir()
+        .map_err(|error| format!("no se pudo leer el directorio actual: {error}"))?;
+    let executable = std::env::current_exe().ok();
+
+    let mut residuals: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&cwd) {
+        for entry in entries.filter_map(|entry| entry.ok()) {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if name.starts_with("tinkiva-docker-manager-linux-")
+                && executable.as_ref() != Some(&entry.path())
+            {
+                residuals.push(entry.path());
+            }
+        }
+    }
+    if residuals.is_empty() {
+        return Ok(());
+    }
+
+    println!("Se encontraron archivos de instalación residuales:");
+    for path in &residuals {
+        println!("    - {}", path.display());
+    }
+    let answer = read_line("? ¿Eliminarlos? [default: 1 = sí, 2 = no]: ", reader)?;
+    if answer == "2" {
+        println!("  Se conservaron los archivos.");
+        return Ok(());
+    }
+    let mut removed = 0;
+    for path in &residuals {
+        if std::fs::remove_file(path).is_ok() {
+            removed += 1;
+        }
+    }
+    println!("  ✔ {removed} archivo(s) residual(es) eliminado(s).");
     Ok(())
 }
 

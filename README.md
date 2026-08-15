@@ -132,7 +132,7 @@ Si ya existe configuración, ejecutar `tinkivadm` a secas muestra un menú: inic
 | Comando | Uso |
 |---|---|
 | `tinkivadm` | Menú interactivo con config existente; primer plano en el primer uso. |
-| `tinkivadm start` | Arranca el panel en segundo plano (asistente si no hay config). Logs en `tinkiva/tinkiva.log`. |
+| `tinkivadm start` | Arranca el panel en segundo plano (asistente si no hay config). Logs en `tinkiva-docker-manager/tinkiva.log`. |
 | `tinkivadm stop` | Detiene la instancia en segundo plano (SIGTERM; fuerza `-9` si no baja). |
 | `tinkivadm status` | Muestra si está en ejecución, el pid y la URL del panel. |
 | `tinkivadm logs [N] [-f]` | Últimas N líneas del log (default 50); `-f` lo sigue en vivo. |
@@ -141,7 +141,7 @@ Si ya existe configuración, ejecutar `tinkivadm` a secas muestra un menú: inic
 | `tinkivadm version` | Imprime la versión actual. |
 | `tinkivadm help` | Muestra todos los comandos. |
 
-Sin systemd, el binario gestiona su propio demonio. Todo vive dentro de `tinkiva/` en el directorio donde lo ejecutes: `tinkiva/tinkiva.env` (config), `tinkiva/tinkiva.pid` (proceso) y `tinkiva/tinkiva.log` (salida), junto a `tinkiva/data` y `tinkiva/apps`.
+Sin systemd, el binario gestiona su propio demonio. Todo vive dentro de `tinkiva-docker-manager/` en el directorio donde lo ejecutes: `tinkiva-docker-manager/tinkiva.env` (config), `tinkiva-docker-manager/tinkiva.pid` (proceso) y `tinkiva-docker-manager/tinkiva.log` (salida), junto a `data` y `apps`. Al terminar el asistente se ofrecen a borrar los binarios descargados residuales (`tinkiva-docker-manager-linux-*`), y una carpeta `tinkiva/` de versiones anteriores se renombra automáticamente a `tinkiva-docker-manager/`.
 
 ### Servicio systemd (Opción B2)
 
@@ -451,7 +451,7 @@ Instalación directa del binario (Opción A / B1):
 ```bash
 tinkivadm stop
 sudo rm /usr/local/bin/tinkivadm
-rm -rf tinkiva   # config, pid, log, datos y apps (¡revisa antes de borrar!)
+rm -rf tinkiva-docker-manager   # config, pid, log, datos y apps (¡revisa antes de borrar!)
 ```
 
 `/opt/tinkiva/apps` nunca se borra automáticamente para proteger tus proyectos y datos.
