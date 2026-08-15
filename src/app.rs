@@ -236,7 +236,7 @@ impl App {
             format!(
                 concat!(
                     "{{",
-                    "\"name\":\"Tinkiva Docker Manager\",",,
+                    "\"name\":\"Tinkiva Docker Manager\",",
                     "\"version\":{},",
                     "\"started_at\":{},",
                     "\"allowed_root\":{},",
