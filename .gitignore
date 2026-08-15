@@ -1,6 +1,7 @@
 /target/
 /.idea/
 /.vscode/
+/.codegraph/
 /web/node_modules/
 # web/dist/ SÍ se versiona: cargo lo embebe con include_str! y así compilar no requiere Node.
 *.log
