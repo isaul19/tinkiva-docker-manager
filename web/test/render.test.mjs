@@ -164,7 +164,12 @@ const API = {
       command: '/sbin/init',
     },
   ],
-  '/api/github': { connected: false, public_url: 'http://127.0.0.1:8787' },
+  // Caso habitual: se entra por un túnel SSH, así que no hay URL pública.
+  '/api/github': {
+    connected: false,
+    panel_url: 'http://localhost:8787',
+    webhook_url: null,
+  },
   '/api/github/installations': [],
 };
 
@@ -326,6 +331,22 @@ test('la vista de GitHub ofrece el alta de un clic cuando no hay App', async () 
   const { text } = await mount({ token: 'x'.repeat(40), hash: '#/github' });
   assert.match(text, /Conectar con GitHub/);
   assert.match(text, /Ya tengo una GitHub App/);
+});
+
+test('sobre localhost avisa de que la App se creará sin webhook', async () => {
+  // GitHub rechaza el manifiesto si el webhook apunta a una dirección privada;
+  // la interfaz debe explicarlo antes de enviar, no dejar que falle en GitHub.
+  const app = await mount({ token: 'x'.repeat(40), hash: '#/github' });
+  const text = app.currentText();
+
+  assert.match(text, /http:\/\/localhost:8787/);
+  assert.match(text, /sin webhook/);
+  assert.match(text, /no habrá redespliegue automático/);
+  assert.match(text, /URL pública del panel/);
+
+  // El botón de conectar sigue habilitado: sin webhook el resto funciona igual.
+  const connect = app.find('button', 'Conectar con GitHub');
+  assert.ok(connect && !connect.disabled, 'debe poder conectarse igualmente');
 });
 
 test('la vista de sistema lista las herramientas externas', async () => {

@@ -269,11 +269,9 @@ impl App {
             .is_some_and(|token| constant_time_eq(token, &self.config.admin_token))
     }
 
-    /// URL absoluta con la que GitHub puede volver al panel.
-    fn public_url(&self, request: &Request) -> String {
-        if let Some(url) = &self.config.public_url {
-            return url.clone();
-        }
+    /// URL con la que **el navegador** ve el panel, deducida de la cabecera `Host`.
+    /// Vale que sea `localhost`: los retornos desde GitHub los hace el navegador.
+    fn panel_url(&self, request: &Request) -> String {
         let host = request
             .header("host")
             .filter(|host| valid_host(host))
@@ -287,6 +285,20 @@ impl App {
             "http"
         };
         format!("{scheme}://{host}")
+    }
+
+    /// URL a la que **GitHub** puede llamar para entregar webhooks. Debe ser
+    /// alcanzable desde internet; si no la hay, no se configura webhook y los
+    /// redespliegues automáticos quedan desactivados hasta que se añada uno.
+    ///
+    /// Orden de preferencia: lo que indique el usuario en el formulario,
+    /// `TDM_PUBLIC_URL`, y por último la propia URL del panel si resulta ser pública.
+    fn webhook_base(&self, request: &Request, requested: Option<&str>) -> Option<String> {
+        requested
+            .map(str::to_owned)
+            .or_else(|| self.config.public_url.clone())
+            .or_else(|| Some(self.panel_url(request)))
+            .filter(|url| is_internet_reachable(url))
     }
 
     // ── Información general ────────────────────────────────────────────────
@@ -875,7 +887,11 @@ impl App {
     // ── GitHub App ─────────────────────────────────────────────────────────
 
     fn github_status(&self, request: &Request) -> Response {
-        match self.github.status_json(&self.public_url(request)) {
+        let panel_url = self.panel_url(request);
+        let webhook = self
+            .webhook_base(request, None)
+            .map(|base| format!("{base}/hooks/github"));
+        match self.github.status_json(&panel_url, webhook.as_deref()) {
             Ok(body) => Response::json(200, body),
             Err(error) => json_error(500, &error),
         }
@@ -900,7 +916,30 @@ impl App {
                 "GitHub necesita curl y openssl instalados en el servidor",
             );
         }
-        let public_url = self.public_url(request);
+
+        let fields = match request.form() {
+            Ok(fields) => fields,
+            Err(error) => return json_error(400, &error),
+        };
+        // El usuario puede indicar una URL pública distinta a la del navegador,
+        // típico cuando entra por un túnel SSH pero el panel sí tiene dominio.
+        let requested = optional_field(&fields, "webhook_url").map(|value| {
+            value.trim().trim_end_matches('/').to_owned()
+        });
+        if let Some(url) = &requested {
+            if !is_internet_reachable(url) {
+                return json_error(
+                    422,
+                    "esa URL no es alcanzable desde internet; GitHub rechazaría el manifiesto",
+                );
+            }
+        }
+
+        let panel_url = self.panel_url(request);
+        let webhook = self
+            .webhook_base(request, requested.as_deref())
+            .map(|base| format!("{base}/hooks/github"));
+
         let suffix = match random_hex(3) {
             Ok(suffix) => suffix,
             Err(error) => return json_error(500, &format!("no se pudo generar sufijo: {error}")),
@@ -913,10 +952,17 @@ impl App {
         Response::json(
             200,
             format!(
-                "{{\"action\":{},\"manifest\":{},\"state\":{}}}",
+                concat!(
+                    "{{\"action\":{},\"manifest\":{},\"state\":{},",
+                    "\"panel_url\":{},\"webhook_url\":{}}}"
+                ),
                 json_string(&format!("https://github.com/settings/apps/new?state={state}")),
-                json_string(&self.github.manifest(&public_url, &suffix)),
+                json_string(&self.github.manifest(&panel_url, webhook.as_deref(), &suffix)),
                 json_string(&state),
+                json_string(&panel_url),
+                webhook
+                    .as_deref()
+                    .map_or_else(|| "null".to_owned(), json_string),
             ),
         )
     }
@@ -945,7 +991,7 @@ impl App {
 
     /// URL de instalación con un nonce fresco para el retorno.
     fn github_install_url(&self) -> Response {
-        let status = match self.github.status_json("") {
+        let status = match self.github.status_json("", None) {
             Ok(status) => status,
             Err(error) => return json_error(500, &error),
         };
@@ -1692,6 +1738,61 @@ fn valid_host(value: &str) -> bool {
         })
 }
 
+/// ¿Puede GitHub llamar a esta URL desde internet?
+///
+/// GitHub rechaza el manifiesto completo si el webhook apunta a una dirección
+/// privada, así que conviene detectarlo antes de enviarlo y no después.
+fn is_internet_reachable(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+
+    // Separa el puerto respetando la notación IPv6 `[::1]:8787`.
+    let host = match authority.strip_prefix('[') {
+        Some(tail) => tail.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    let host = host.to_ascii_lowercase();
+    if host.is_empty() {
+        return false;
+    }
+
+    if host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+        || host.ends_with(".home")
+        || host.ends_with(".lan")
+        || host == "::1"
+        || host == "0.0.0.0"
+    {
+        return false;
+    }
+
+    // Rangos privados de IPv4 y direcciones locales de IPv6.
+    let octets: Vec<Option<u8>> = host.split('.').map(|part| part.parse::<u8>().ok()).collect();
+    if octets.len() == 4 && octets.iter().all(Option::is_some) {
+        let octets: Vec<u8> = octets.into_iter().flatten().collect();
+        return !matches!(
+            (octets[0], octets[1]),
+            (127, _) | (10, _) | (192, 168) | (169, 254) | (172, 16..=31)
+        );
+    }
+    if host.starts_with("fe80:") || host.starts_with("fc") || host.starts_with("fd") {
+        return false;
+    }
+
+    // Un nombre sin punto no es resoluble públicamente (p. ej. `mi-servidor`).
+    host.contains('.')
+}
+
 fn valid_branch(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
@@ -1829,6 +1930,30 @@ mod tests {
         assert!(parse_environment("SIN_IGUAL").is_err());
         assert!(parse_environment("APP_IMAGE=otra:1").is_err());
         assert!(parse_environment("TDM_MEMORY_LIMIT=99g").is_err());
+    }
+
+    #[test]
+    fn private_urls_are_not_offered_to_github_as_webhooks() {
+        // Casos que provocaban «Hook url is not supported because it isn't
+        // reachable over the public Internet».
+        assert!(!is_internet_reachable("http://localhost:8787"));
+        assert!(!is_internet_reachable("http://127.0.0.1:8787"));
+        assert!(!is_internet_reachable("http://[::1]:8787"));
+        assert!(!is_internet_reachable("http://192.168.1.50:8787"));
+        assert!(!is_internet_reachable("http://10.0.0.4"));
+        assert!(!is_internet_reachable("http://172.16.0.1"));
+        assert!(!is_internet_reachable("http://172.31.255.254"));
+        assert!(!is_internet_reachable("http://169.254.169.254"));
+        assert!(!is_internet_reachable("http://panel.local"));
+        assert!(!is_internet_reachable("http://mi-servidor"));
+        assert!(!is_internet_reachable("ftp://panel.example.com"));
+        assert!(!is_internet_reachable(""));
+
+        assert!(is_internet_reachable("https://panel.example.com"));
+        assert!(is_internet_reachable("https://panel.example.com:8443"));
+        assert!(is_internet_reachable("http://203.0.113.10"));
+        // 172.32 ya está fuera del rango privado 172.16–172.31.
+        assert!(is_internet_reachable("http://172.32.0.1"));
     }
 
     #[test]

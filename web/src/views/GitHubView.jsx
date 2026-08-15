@@ -14,6 +14,7 @@ import { useAsync } from '../lib/hooks.js';
 import { formatRelative } from '../lib/format.js';
 import { AsyncBlock, Badge, Button, EmptyState, Panel, Spinner } from '../ui/Primitives.jsx';
 import { CopyValue, Field, FormGrid, Input, TextArea } from '../ui/Form.jsx';
+// `Field` e `Input` también se usan fuera del diálogo manual, para la URL pública.
 import { Modal } from '../ui/Modal.jsx';
 import { useToast } from '../ui/Toast.jsx';
 
@@ -39,14 +40,19 @@ export function GitHubView() {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [manual, setManual] = useState(false);
+  const [publicUrl, setPublicUrl] = useState('');
 
   const status = useAsync(() => api.get('/api/github'), [refreshToken]);
   const connected = status.data?.connected;
+  // Sin URL pública GitHub rechazaría el manifiesto, así que la App se crea sin webhook.
+  const reachable = Boolean(status.data?.webhook_url) || publicUrl.trim().length > 0;
 
   const connect = async () => {
     setBusy(true);
     try {
-      const { action, manifest } = await api.post('/api/github/manifest');
+      const { action, manifest } = await api.post('/api/github/manifest', {
+        webhook_url: publicUrl.trim(),
+      });
       submitManifest(action, manifest);
     } catch (error) {
       toast.error(error);
@@ -115,6 +121,39 @@ export function GitHubView() {
               <li>Eliges los repositorios a los que dar acceso de lectura.</li>
               <li>El panel clona, construye y redespliega en cada <code>push</code>.</li>
             </ol>
+
+            <Field
+              label="URL pública del panel (opcional)"
+              hint={
+                reachable
+                  ? 'GitHub usará esta dirección para entregar los webhooks de push.'
+                  : 'Solo hace falta si quieres redespliegues automáticos.'
+              }
+            >
+              <Input
+                type="url"
+                value={publicUrl}
+                onInput={(event) => setPublicUrl(event.currentTarget.value)}
+                placeholder={status.data?.webhook_url || 'https://panel.tudominio.com'}
+              />
+            </Field>
+
+            {!reachable ? (
+              <div class="notice notice-warning">
+                <AlertTriangle size={17} />
+                <div>
+                  <strong>Estás entrando por {status.data?.panel_url || 'una dirección privada'}.</strong>
+                  <p class="muted">
+                    GitHub no puede llamar a una dirección privada, así que la App se creará{' '}
+                    <strong>sin webhook</strong>: todo lo demás funciona —listar repositorios,
+                    clonar y desplegar a mano— pero no habrá redespliegue automático al hacer{' '}
+                    <code>push</code>. Puedes añadir el webhook más tarde desde los ajustes de la
+                    App en GitHub, o rellenar arriba tu dominio público ahora.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
             <Button
               variant="primary"
               icon={Github}
@@ -125,8 +164,9 @@ export function GitHubView() {
               Conectar con GitHub
             </Button>
             <p class="muted small">
-              El panel debe ser accesible desde tu navegador en la URL que estás usando ahora;
-              GitHub redirige aquí al terminar.
+              El retorno desde GitHub lo hace tu navegador, así que{' '}
+              <code>{status.data?.panel_url || 'localhost'}</code> sirve perfectamente aunque no
+              sea pública.
             </p>
           </Panel>
 
@@ -171,7 +211,26 @@ export function GitHubView() {
                 Instalar en repositorios
               </Button>
             </div>
-            <CopyValue label="URL del webhook" value={status.data.webhook_url} />
+            {status.data.webhook_url ? (
+              <CopyValue label="URL del webhook" value={status.data.webhook_url} />
+            ) : (
+              <div class="notice notice-warning">
+                <AlertTriangle size={17} />
+                <div>
+                  <strong>Sin webhook configurado</strong>
+                  <p class="muted">
+                    El panel no es alcanzable desde internet en{' '}
+                    <code>{status.data.panel_url}</code>, así que no hay redespliegue automático
+                    al hacer <code>push</code>. Cuando tengas un dominio público, añádelo en{' '}
+                    <a class="text-link" href={status.data.settings_url} target="_blank" rel="noreferrer">
+                      los ajustes de la App <ExternalLink size={12} />
+                    </a>{' '}
+                    como <code>https://tu-dominio/hooks/github</code>, o define{' '}
+                    <code>TDM_PUBLIC_URL</code> en la configuración del panel.
+                  </p>
+                </div>
+              </div>
+            )}
           </Panel>
 
           <Installations refreshToken={refreshToken} />

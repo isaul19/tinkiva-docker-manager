@@ -149,13 +149,27 @@ impl GitHub {
     // ── Alta de la App ─────────────────────────────────────────────────────
 
     /// Manifiesto que el navegador envía por POST a `github.com/settings/apps/new`.
-    pub fn manifest(&self, public_url: &str, suffix: &str) -> String {
+    ///
+    /// `panel_url` es la dirección con la que **el navegador** ve el panel, así que
+    /// puede ser `localhost` sin problema: los redirect los hace el propio navegador.
+    /// `webhook_url` en cambio lo llama **GitHub**, y GitHub rechaza el manifiesto
+    /// entero si no es alcanzable desde internet. Cuando no hay una URL pública se
+    /// omite `hook_attributes` y la App se crea sin webhook; se puede añadir después
+    /// desde los ajustes de la App en GitHub.
+    pub fn manifest(&self, panel_url: &str, webhook_url: Option<&str>, suffix: &str) -> String {
+        let hook = webhook_url.map_or_else(String::new, |url| {
+            format!(
+                "\"hook_attributes\":{{\"url\":{},\"active\":true}},",
+                json_string(url)
+            )
+        });
+
         format!(
             concat!(
                 "{{",
                 "\"name\":{},",
                 "\"url\":{},",
-                "\"hook_attributes\":{{\"url\":{},\"active\":true}},",
+                "{}",
                 "\"redirect_url\":{},",
                 "\"setup_url\":{},",
                 "\"callback_urls\":[{}],",
@@ -168,11 +182,11 @@ impl GitHub {
                 "}}"
             ),
             json_string(&format!("Tinkiva DM {suffix}")),
-            json_string(public_url),
-            json_string(&format!("{public_url}/hooks/github")),
-            json_string(&format!("{public_url}/github/callback")),
-            json_string(&format!("{public_url}/github/installed")),
-            json_string(&format!("{public_url}/github/callback")),
+            json_string(panel_url),
+            hook,
+            json_string(&format!("{panel_url}/github/callback")),
+            json_string(&format!("{panel_url}/github/installed")),
+            json_string(&format!("{panel_url}/github/callback")),
         )
     }
 
@@ -445,14 +459,20 @@ impl GitHub {
     }
 
     /// Estado que consume la interfaz. Nunca incluye secretos.
-    pub fn status_json(&self, public_url: &str) -> Result<String, String> {
+    pub fn status_json(
+        &self,
+        panel_url: &str,
+        webhook_url: Option<&str>,
+    ) -> Result<String, String> {
+        let webhook = webhook_url.map_or_else(|| "null".to_owned(), json_string);
         let credentials = self.credentials()?;
+
         Ok(match credentials {
             Some(credentials) => format!(
                 concat!(
                     "{{\"connected\":true,\"app_id\":{},\"slug\":{},\"name\":{},",
                     "\"html_url\":{},\"install_url\":{},\"connected_at\":{},",
-                    "\"webhook_url\":{}}}"
+                    "\"panel_url\":{},\"webhook_url\":{},\"settings_url\":{}}}"
                 ),
                 credentials.app_id,
                 json_string(&credentials.slug),
@@ -463,11 +483,17 @@ impl GitHub {
                     credentials.slug
                 )),
                 credentials.connected_at,
-                json_string(&format!("{public_url}/hooks/github")),
+                json_string(panel_url),
+                webhook,
+                json_string(&format!(
+                    "https://github.com/settings/apps/{}",
+                    credentials.slug
+                )),
             ),
             None => format!(
-                "{{\"connected\":false,\"public_url\":{}}}",
-                json_string(public_url)
+                "{{\"connected\":false,\"panel_url\":{},\"webhook_url\":{}}}",
+                json_string(panel_url),
+                webhook
             ),
         })
     }
@@ -564,7 +590,11 @@ mod tests {
     #[test]
     fn manifest_points_every_callback_at_the_panel() {
         let github = instance();
-        let manifest = github.manifest("https://panel.example.com", "abc123");
+        let manifest = github.manifest(
+            "https://panel.example.com",
+            Some("https://panel.example.com/hooks/github"),
+            "abc123",
+        );
         let parsed = Json::parse(&manifest).unwrap();
         assert_eq!(parsed.string("name"), Some("Tinkiva DM abc123"));
         assert_eq!(
@@ -582,6 +612,25 @@ mod tests {
             Some("https://panel.example.com/hooks/github")
         );
         assert_eq!(parsed.get("public").and_then(Json::as_bool), Some(false));
+    }
+
+    #[test]
+    fn manifest_omits_the_hook_when_the_panel_is_not_public() {
+        // GitHub rechaza el manifiesto entero si el webhook apunta a localhost,
+        // así que sin URL pública la App se crea sin webhook.
+        let github = instance();
+        let manifest = github.manifest("http://localhost:8787", None, "abc123");
+        let parsed = Json::parse(&manifest).unwrap();
+
+        assert!(parsed.get("hook_attributes").is_none());
+        assert_eq!(
+            parsed.string("redirect_url"),
+            Some("http://localhost:8787/github/callback")
+        );
+        assert_eq!(
+            parsed.string("setup_url"),
+            Some("http://localhost:8787/github/installed")
+        );
     }
 
     #[test]
@@ -618,7 +667,7 @@ mod tests {
             })
             .unwrap();
 
-        let status = github.status_json("http://127.0.0.1:8787").unwrap();
+        let status = github.status_json("http://127.0.0.1:8787", None).unwrap();
         assert!(status.contains("\"connected\":true"));
         assert!(status.contains("https://github.com/apps/demo/installations/new"));
         assert!(!status.contains("super-secreto"));

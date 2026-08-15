@@ -396,6 +396,30 @@ A partir de ahí, crear un recurso desde un repositorio clona la rama elegida en
 `push` a esa rama dispara un redespliegue, validado con HMAC-SHA256 sobre el cuerpo del
 webhook.
 
+### Si entras por un túnel SSH o localhost
+
+Son dos direcciones distintas y conviene no confundirlas:
+
+| | Quién la usa | ¿Debe ser pública? |
+| --- | --- | --- |
+| `redirect_url` / `setup_url` | Tu navegador, al volver de GitHub | **No.** `localhost` funciona |
+| `hook_attributes.url` | GitHub, al entregar un `push` | **Sí.** GitHub rechaza direcciones privadas |
+
+Si accedes al panel por `http://localhost:8787` a través de un túnel SSH, el panel lo
+detecta y crea la App **sin webhook**. Todo lo demás funciona igual: listar repositorios,
+clonar, construir y desplegar a mano. Lo único que no tendrás es el redespliegue automático
+al hacer `push`.
+
+Para habilitarlo tienes tres opciones:
+
+1. Escribir tu dominio público en el campo **URL pública del panel** antes de conectar.
+2. Definir `TDM_PUBLIC_URL=https://panel.tudominio.com` en la configuración y reconectar.
+3. Añadir el webhook más tarde en `Settings → Developer settings → GitHub Apps → tu App →
+   Webhook`, apuntando a `https://tu-dominio/hooks/github` con el secreto que GitHub generó.
+
+Sin ninguna de las tres, el panel te lo recuerda en la sección GitHub en vez de fallar en
+silencio.
+
 Ten en cuenta que construir imágenes consume CPU y RAM del propio servidor. En máquinas
 muy pequeñas suele salir más barato construir en GitHub Actions y desplegar por imagen.
 
@@ -414,7 +438,7 @@ Archivo predeterminado: `/etc/tinkiva-docker-manager/env`.
 | `TDM_ALLOWED_ROOT` | `/opt/tinkiva/apps` | Única raíz aceptada para Compose y `.env`. |
 | `TDM_DOCKER_BIN` | `docker` | Ruta del Docker CLI. |
 | `TDM_GIT_BIN` | `git` | Ruta de git, usada para los recursos de repositorio. |
-| `TDM_PUBLIC_URL` | deducido de `Host` | URL pública del panel. Solo hace falta si vive tras un proxy con otro nombre, porque GitHub debe poder volver aquí. |
+| `TDM_PUBLIC_URL` | sin valor | URL del panel alcanzable **desde internet**. Solo se usa para el webhook de GitHub; los retornos del navegador salen siempre de la cabecera `Host`. Sin ella no hay redespliegue automático en cada `push`. |
 | `TDM_WORKERS` | `2` | Workers HTTP fijos; rango 1–16. |
 | `TDM_MAX_HISTORY` | `200` | Registros conservados; rango 10–10,000. |
 

@@ -20,6 +20,10 @@
 - Integración con GitHub App mediante el flujo de manifiesto de un clic: el panel te
   lleva a GitHub, GitHub crea la App y devuelve las credenciales, y después eliges en
   qué repositorios instalarla (todos o algunos).
+- La URL del navegador y la del webhook se tratan por separado: acceder por `localhost` o
+  por un túnel SSH ya no rompe el alta. Cuando no hay una dirección pública, la App se crea
+  sin webhook y el panel explica cómo añadirlo después, en lugar de que GitHub rechace el
+  manifiesto con «Hook url is not supported».
 - Alta manual alternativa para quien ya tenga una App creada.
 - Recursos desde repositorio: clonado superficial, build de la imagen y redespliegue
   automático en cada `push` a la rama elegida, validado con HMAC-SHA256.
