@@ -27,6 +27,7 @@ export function RepositoryForm({ onCreated }) {
     published_port: '',
     memory_mb: '512',
     environment: '',
+    external_access: false,
     auto_deploy: true,
   });
 
@@ -241,7 +242,7 @@ export function RepositoryForm({ onCreated }) {
           </Field>
         ) : null}
 
-        <Field label="Puerto del contenedor" hint="Vacío = 80 para frontend, 3000 para Node y 8000 para Python.">
+        <Field label="Puerto del contenedor" hint="Vacío = se detecta desde EXPOSE o usa 80/3000/8000 según el runtime.">
           <Input
             type="number"
             min="1"
@@ -251,7 +252,7 @@ export function RepositoryForm({ onCreated }) {
             placeholder="3000"
           />
         </Field>
-        <Field label="Puerto local" hint="Vacío = el mismo que el contenedor. Se publica solo en 127.0.0.1.">
+        <Field label="Puerto del VPS" hint="Vacío = usa el mismo puerto que el contenedor.">
           <Input
             type="number"
             min="1"
@@ -261,6 +262,24 @@ export function RepositoryForm({ onCreated }) {
             placeholder="3000"
           />
         </Field>
+
+        <label class={`exposure-option field-wide${form.external_access ? ' is-public' : ''}`}>
+          <input
+            type="checkbox"
+            checked={form.external_access}
+            onChange={(event) =>
+              setForm((current) => ({ ...current, external_access: event.currentTarget.checked }))
+            }
+          />
+          <span class="exposure-copy">
+            <strong>Permitir acceso externo al VPS</strong>
+            <span class="field-hint">
+              {form.external_access
+                ? 'Escucha en 0.0.0.0. Debes permitir este puerto en el firewall o Security Group.'
+                : 'Escucha en 127.0.0.1. Solo el VPS, un proxy local o un túnel SSH pueden acceder.'}
+            </span>
+          </span>
+        </label>
 
         <Field label="Variables de entorno" hint="Una por línea, CLAVE=valor." wide>
           <TextArea

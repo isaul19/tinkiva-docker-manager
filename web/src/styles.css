@@ -1017,6 +1017,31 @@ code {
   color: var(--faint);
 }
 
+.select-control {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.select-input {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 2.35rem;
+}
+
+.select-control > svg {
+  position: absolute;
+  top: 50%;
+  right: 0.85rem;
+  transform: translateY(-50%);
+  color: var(--faint);
+  pointer-events: none;
+}
+
+.select-control:focus-within > svg {
+  color: var(--accent);
+}
+
 .field-error .input {
   border-color: var(--danger);
 }
@@ -1064,6 +1089,46 @@ code {
 
 .inline-field.checkbox input {
   accent-color: var(--accent);
+}
+
+.exposure-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.72rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.exposure-option:hover {
+  border-color: var(--accent-dim);
+}
+
+.exposure-option.is-public {
+  border-color: rgba(245, 196, 81, 0.35);
+  background: var(--warning-soft);
+}
+
+.exposure-option input {
+  margin: 0.15rem 0 0;
+  accent-color: var(--accent);
+}
+
+.exposure-copy {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.exposure-copy strong {
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 620;
 }
 
 .form-actions {

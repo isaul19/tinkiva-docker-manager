@@ -1,4 +1,4 @@
-import { Check, Copy } from 'lucide-preact';
+import { Check, ChevronDown, Copy } from 'lucide-preact';
 import { useState } from 'preact/hooks';
 
 export function Field({ label, hint, error, wide = false, children }) {
@@ -22,13 +22,16 @@ export function TextArea({ rows = 4, ...rest }) {
 
 export function Select({ options = [], ...rest }) {
   return (
-    <select class="input" {...rest}>
-      {options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </select>
+    <span class="select-control">
+      <select class="input select-input" {...rest}>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown size={15} aria-hidden="true" />
+    </span>
   );
 }
 

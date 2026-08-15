@@ -26,7 +26,7 @@ pub fn detect(context: &Path, requested_dockerfile: &str) -> Result<BuildPlan, S
             dockerfile_name: requested_dockerfile.to_owned(),
             dockerfile: None,
             runtime: "docker",
-            default_port: None,
+            default_port: dockerfile_exposed_port(&existing)?,
         });
     }
 
@@ -241,7 +241,33 @@ fn generated(runtime: &'static str, default_port: Option<u16>, dockerfile: &str)
     }
 }
 
-fn read_small(path: &PathBuf) -> Result<String, String> {
+fn dockerfile_exposed_port(path: &Path) -> Result<Option<u16>, String> {
+    let contents = read_small(path)?;
+    for raw in contents.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(instruction) = parts.next() else {
+            continue;
+        };
+        if !instruction.eq_ignore_ascii_case("EXPOSE") {
+            continue;
+        }
+        for value in parts {
+            let candidate = value.split('/').next().unwrap_or(value);
+            if let Ok(port) = candidate.parse::<u16>() {
+                if port > 0 {
+                    return Ok(Some(port));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn read_small(path: &Path) -> Result<String, String> {
     let metadata = fs::metadata(path)
         .map_err(|error| format!("no se pudo leer {}: {error}", path.display()))?;
     if metadata.len() > MAX_MANIFEST_BYTES {
@@ -269,9 +295,10 @@ mod tests {
     #[test]
     fn prefers_a_repository_dockerfile() {
         let path = fixture();
-        fs::write(path.join("Dockerfile"), "FROM scratch\n").unwrap();
+        fs::write(path.join("Dockerfile"), "FROM scratch\nEXPOSE 3000/tcp\n").unwrap();
         let plan = detect(&path, "Dockerfile").unwrap();
         assert_eq!(plan.runtime, "docker");
+        assert_eq!(plan.default_port, Some(3000));
         assert!(plan.dockerfile.is_none());
         fs::remove_dir_all(path).unwrap();
     }

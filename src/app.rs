@@ -1402,6 +1402,7 @@ impl App {
             },
             Some(&password),
             published_port,
+            false,
         )
     }
 
@@ -1443,6 +1444,7 @@ impl App {
         if published_port.is_some() && container_port.is_none() {
             return json_error(422, "indica también el puerto interno del contenedor");
         }
+        let external_access = field(&fields, "external_access") == "true";
         let memory_mb = optional_field(&fields, "memory_mb")
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(512)
@@ -1461,6 +1463,7 @@ impl App {
             image,
             container_port,
             published_port,
+            external_access,
             memory_mb,
             volume_path,
             environment: &environment,
@@ -1489,6 +1492,7 @@ impl App {
             },
             None,
             published_port,
+            external_access,
         )
     }
 
@@ -1542,11 +1546,6 @@ impl App {
             Ok(port) => port,
             Err(error) => return json_error(422, &error),
         };
-        // Puerto local vacío → se publica en el mismo puerto que escucha el
-        // contenedor; sin ninguno el servicio queda solo en la red interna.
-        if published_port.is_none() && container_port.is_some() {
-            published_port = container_port;
-        }
         let memory_mb = optional_field(&fields, "memory_mb")
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(512)
@@ -1626,10 +1625,16 @@ impl App {
         if container_port.is_none() {
             container_port = plan.default_port;
         }
+        // En modo automático el puerto puede conocerse recién después de detectar
+        // el runtime. Si el puerto del VPS quedó vacío, usamos el mismo puerto.
+        if published_port.is_none() && container_port.is_some() {
+            published_port = container_port;
+        }
         if published_port.is_some() && container_port.is_none() {
             let _ = fs::remove_dir_all(&directory);
             return json_error(422, "indica el puerto interno para publicar el servicio");
         }
+        let external_access = field(&fields, "external_access") == "true";
         if let Some(contents) = &plan.dockerfile {
             if let Err(error) = atomic_write(&directory.join(buildpack::BLUEPRINT_FILE), contents.as_bytes(), 0o640)
                 .and_then(|_| atomic_write(&directory.join(buildpack::CONTEXT_FILE), build_context.as_bytes(), 0o640))
@@ -1648,6 +1653,7 @@ impl App {
             build_context,
             container_port,
             published_port,
+            external_access,
             memory_mb,
             environment: &environment,
         });
@@ -1669,6 +1675,7 @@ impl App {
             },
             None,
             published_port,
+            external_access,
         )
     }
 
@@ -1701,6 +1708,7 @@ impl App {
         resource: NewResource,
         secret: Option<&str>,
         published_port: Option<u16>,
+        external_access: bool,
     ) -> Response {
         let compose_file = directory.join("compose.yaml");
         let env_file = directory.join(".env");
@@ -1760,13 +1768,15 @@ impl App {
                     format!(
                         concat!(
                             "{{\"project\":{},\"deployment\":null,\"password\":{},",
-                            "\"connection_uri\":{},\"host\":{},\"published_port\":{},\"error\":{}}}"
+                            "\"connection_uri\":{},\"host\":{},\"published_port\":{},",
+                            "\"external_access\":{},\"error\":{}}}"
                         ),
                         project.to_json(true),
                         json_optional_secret(secret),
                         json_string(&resource.generated.connection_uri),
                         json_string(&resource.generated.host),
                         published_port.map_or_else(|| "null".to_owned(), |port| port.to_string()),
+                        external_access,
                         json_string(&error.message),
                     ),
                 );
@@ -1786,7 +1796,8 @@ impl App {
             format!(
                 concat!(
                     "{{\"project\":{},\"deployment\":{},\"password\":{},",
-                    "\"connection_uri\":{},\"host\":{},\"published_port\":{}}}"
+                    "\"connection_uri\":{},\"host\":{},\"published_port\":{},",
+                    "\"external_access\":{}}}"
                 ),
                 project.to_json(true),
                 outcome.deployment.to_json(),
@@ -1794,6 +1805,7 @@ impl App {
                 json_string(&resource.generated.connection_uri),
                 json_string(&resource.generated.host),
                 published_port.map_or_else(|| "null".to_owned(), |port| port.to_string()),
+                external_access,
             ),
         )
     }

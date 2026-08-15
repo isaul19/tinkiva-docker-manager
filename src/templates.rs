@@ -2,8 +2,8 @@
 //!
 //! Cada plantilla genera un `compose.yaml` endurecido (sin privilegios extra,
 //! con límite de memoria, healthcheck, volumen persistente y red interna) más un
-//! `.env` con las credenciales. Nada se publica al exterior salvo que el usuario
-//! pida un puerto, y en ese caso se enlaza solo a `127.0.0.1`.
+//! `.env` con las credenciales. Los puertos se enlazan a `127.0.0.1` por defecto;
+//! los servicios de aplicación pueden optar explícitamente por `0.0.0.0`.
 
 use crate::util::json_string;
 
@@ -317,6 +317,7 @@ pub struct ServiceRequest<'a> {
     pub image: &'a str,
     pub container_port: Option<u16>,
     pub published_port: Option<u16>,
+    pub external_access: bool,
     pub memory_mb: u32,
     pub volume_path: Option<&'a str>,
     /// Pares `CLAVE=valor` ya validados.
@@ -326,9 +327,10 @@ pub struct ServiceRequest<'a> {
 /// Servicio suelto a partir de una imagen ya publicada (Docker Hub, GHCR, …).
 pub fn service(request: &ServiceRequest) -> GeneratedResource {
     let host = request.slug.to_owned();
+    let bind = if request.external_access { "0.0.0.0" } else { "127.0.0.1" };
     let ports = match (request.published_port, request.container_port) {
         (Some(published), Some(container)) => {
-            format!("    ports:\n      - \"127.0.0.1:{published}:{container}\"\n")
+            format!("    ports:\n      - \"{bind}:{published}:{container}\"\n")
         }
         _ => String::new(),
     };
@@ -399,6 +401,7 @@ pub struct RepositoryRequest<'a> {
     pub build_context: &'a str,
     pub container_port: Option<u16>,
     pub published_port: Option<u16>,
+    pub external_access: bool,
     pub memory_mb: u32,
     pub environment: &'a [(String, String)],
 }
@@ -406,9 +409,10 @@ pub struct RepositoryRequest<'a> {
 /// Servicio construido desde un repositorio de GitHub clonado en `<slug>/repo`.
 pub fn repository(request: &RepositoryRequest) -> GeneratedResource {
     let host = request.slug.to_owned();
+    let bind = if request.external_access { "0.0.0.0" } else { "127.0.0.1" };
     let ports = match (request.published_port, request.container_port) {
         (Some(published), Some(container)) => {
-            format!("    ports:\n      - \"127.0.0.1:{published}:{container}\"\n")
+            format!("    ports:\n      - \"{bind}:{published}:{container}\"\n")
         }
         _ => String::new(),
     };
@@ -550,6 +554,7 @@ mod tests {
             image: "nginx:1.27-alpine",
             container_port: Some(80),
             published_port: Some(8080),
+            external_access: false,
             memory_mb: 256,
             volume_path: None,
             environment: &[("LOG_LEVEL".to_owned(), "info".to_owned())],
@@ -558,6 +563,38 @@ mod tests {
         assert!(generated.compose.contains("\"127.0.0.1:8080:80\""));
         assert!(generated.env.contains("APP_IMAGE=nginx:1.27-alpine"));
         assert!(generated.env.contains("LOG_LEVEL=info"));
+    }
+
+    #[test]
+    fn image_service_can_be_exposed_on_all_interfaces() {
+        let generated = service(&ServiceRequest {
+            slug: "public-api",
+            image: "node:24-alpine",
+            container_port: Some(3000),
+            published_port: Some(3000),
+            external_access: true,
+            memory_mb: 256,
+            volume_path: None,
+            environment: &[],
+        });
+        assert!(generated.compose.contains("\"0.0.0.0:3000:3000\""));
+    }
+
+    #[test]
+    fn repository_can_be_exposed_on_all_interfaces() {
+        let generated = repository(&RepositoryRequest {
+            slug: "public-api",
+            repository: "isaul19/public-api",
+            branch: "main",
+            dockerfile: "Dockerfile",
+            build_context: ".",
+            container_port: Some(3000),
+            published_port: Some(3000),
+            external_access: true,
+            memory_mb: 512,
+            environment: &[],
+        });
+        assert!(generated.compose.contains("\"0.0.0.0:3000:3000\""));
     }
 
     #[test]
@@ -570,6 +607,7 @@ mod tests {
             build_context: "/services/api/",
             container_port: Some(3000),
             published_port: None,
+            external_access: false,
             memory_mb: 512,
             environment: &[],
         });

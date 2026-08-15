@@ -7,7 +7,15 @@ import { Badge, stateTone } from '../ui/Primitives.jsx';
  * vuelve a salir por la API, únicamente queda en el `.env` del recurso.
  */
 export function ResultPanel({ result }) {
-  const { project, deployment, password, connection_uri: uri, host, published_port: port } = result;
+  const {
+    project,
+    deployment,
+    password,
+    connection_uri: uri,
+    host,
+    published_port: port,
+    external_access: externalAccess = false,
+  } = result;
   const failed = !deployment || deployment.status !== 'success';
 
   return (
@@ -44,13 +52,20 @@ export function ResultPanel({ result }) {
         {password ? <CopyValue label="Contraseña" value={password} masked /> : null}
         {uri ? <CopyValue label="Cadena de conexión" value={uri} masked={Boolean(password)} /> : null}
         {host ? <CopyValue label="Host interno" value={host} /> : null}
-        {port ? <CopyValue label="Puerto local" value={`127.0.0.1:${port}`} /> : null}
+        {port ? (
+          <CopyValue
+            label={externalAccess ? 'Puerto externo' : 'Puerto del VPS'}
+            value={`${externalAccess ? '0.0.0.0' : '127.0.0.1'}:${port}`}
+          />
+        ) : null}
         <CopyValue label="Compose" value={project.compose_file} />
       </div>
 
       <p class="muted small">
         Otros contenedores de la red <code>tinkiva</code> pueden llegar a este recurso por su host
-        interno. El puerto local, si lo pediste, solo escucha en 127.0.0.1.
+        interno. {externalAccess && port
+          ? 'El puerto del VPS escucha en 0.0.0.0; para entrar desde Internet usa la IP o dominio del VPS y permite el puerto en el firewall o Security Group.'
+          : 'El puerto del VPS, si lo pediste, solo escucha en 127.0.0.1.'}
       </p>
     </div>
   );
