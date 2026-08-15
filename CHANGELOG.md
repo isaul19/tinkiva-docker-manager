@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.0 — 2026-08-15
+
+### Estado en vivo de los recursos
+
+- La vista Recursos refresca cada 15 s y muestra una insignia agregada por recurso —
+  **Corriendo**, **Apagado** o **Error · se detuvo** — calculada con `docker compose ps`
+  sobre el archivo del proyecto, de modo que los stacks multisericio informan bien
+  independientemente del nombre que Compose deduzca para el stack.
+- El botón principal dice **Redesplegar** cuando el recurso está corriendo.
+
+### Rollback honesto
+
+- El rollback responde 409 cuando el recurso no usa imagen configurable por `.env`,
+  cuando aún no hay imagen anterior, o cuando la anterior coincide con la actual.
+- La interfaz deshabilita el botón con el motivo en lugar de descubrirlo al fallar.
+
+### Formularios
+
+- El slug se deriva automáticamente del nombre mientras no se edite a mano.
+
 ## 0.4.1 — 2026-08-15
 
 - `tinkivadm update` prepara el reemplazo junto al ejecutable antes del cambio atómico;
