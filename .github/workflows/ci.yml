@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+      - run: cargo clippy --all-targets
+      - run: cargo test
+      - run: cargo build --release
+      - name: Smoke test API and deployment lifecycle
+        run: ./scripts/smoke-test.sh target/release/tinkiva-deploy-lite

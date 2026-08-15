@@ -1,0 +1,38 @@
+[Unit]
+Description=Tinkiva Deploy Lite
+Documentation=file:/usr/local/share/doc/tinkiva-deploy-lite/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tinkiva-deploy
+Group=tinkiva-deploy
+SupplementaryGroups=docker
+EnvironmentFile=/etc/tinkiva-deploy-lite/env
+Environment=HOME=/var/lib/tinkiva-deploy-lite
+ExecStart=/usr/local/bin/tinkiva-deploy-lite
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=15s
+UMask=0027
+
+# El usuario pertenece al grupo docker; eso equivale a privilegios de root sobre el host.
+# Estas directivas reducen exposición accidental, pero no convierten Docker en un sandbox.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/tinkiva-deploy-lite /opt/tinkiva/apps
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+TasksMax=96
+
+[Install]
+WantedBy=multi-user.target

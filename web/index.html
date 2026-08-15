@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Panel Docker ultraligero para despliegues de un solo servidor."
+    />
+    <title>Tinkiva Docker Manager</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <section id="login-view" class="login-view">
+      <div class="login-card">
+        <div class="brand-mark" aria-hidden="true">T</div>
+        <p class="eyebrow">TINKIVA</p>
+        <h1>Docker Manager</h1>
+        <p class="muted">Docker, despliegues y métricas sin una plataforma pesada.</p>
+        <form id="login-form" autocomplete="off">
+          <label for="token">Token administrador</label>
+          <input
+            id="token"
+            name="token"
+            type="password"
+            minlength="32"
+            required
+            autofocus
+            placeholder="TDL_ADMIN_TOKEN"
+          />
+          <button class="primary full" type="submit">Ingresar</button>
+        </form>
+        <p class="login-note">El token se conserva únicamente en esta pestaña.</p>
+      </div>
+    </section>
+
+    <div id="app-shell" class="app-shell hidden">
+      <aside class="sidebar">
+        <div class="brand-row">
+          <div class="brand-mark small" aria-hidden="true">T</div>
+          <div><strong>Tinkiva</strong><span>Deploy Lite</span></div>
+        </div>
+        <nav aria-label="Principal">
+          <button class="nav-item active" data-page="dashboard"><span>01</span>Resumen</button>
+          <button class="nav-item" data-page="containers"><span>02</span>Contenedores</button>
+          <button class="nav-item" data-page="projects"><span>03</span>Proyectos</button>
+          <button class="nav-item" data-page="history"><span>04</span>Despliegues</button>
+          <button class="nav-item" data-page="postgres"><span>05</span>PostgreSQL</button>
+          <button class="nav-item" data-page="settings"><span>06</span>Sistema</button>
+        </nav>
+        <div class="sidebar-foot">
+          <span id="docker-dot" class="status-dot"></span>
+          <span id="docker-label">Comprobando Docker</span>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p id="page-kicker" class="eyebrow">OPERACIONES</p>
+            <h2 id="page-title">Resumen</h2>
+          </div>
+          <div class="top-actions">
+            <button id="refresh-button" class="ghost" type="button">Actualizar</button>
+            <button id="logout-button" class="ghost danger-text" type="button">Salir</button>
+          </div>
+        </header>
+
+        <div id="loading-bar" class="loading-bar" aria-hidden="true"></div>
+
+        <section id="page-dashboard" class="page active">
+          <div id="metrics-grid" class="metrics-grid skeleton-grid"></div>
+          <div class="two-column">
+            <article class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">DOCKER</p>
+                  <h3>Contenedores</h3>
+                </div>
+                <button class="text-button" data-go="containers">Ver todos</button>
+              </div>
+              <div id="dashboard-containers" class="compact-list empty-state">Cargando…</div>
+            </article>
+            <article class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">ACTIVIDAD</p>
+                  <h3>Últimos despliegues</h3>
+                </div>
+                <button class="text-button" data-go="history">Ver historial</button>
+              </div>
+              <div id="dashboard-history" class="compact-list empty-state">Cargando…</div>
+            </article>
+          </div>
+        </section>
+
+        <section id="page-containers" class="page">
+          <div class="section-head">
+            <div><p class="muted">CPU, memoria, estado, puertos y logs de Docker.</p></div>
+          </div>
+          <div id="containers-content" class="panel table-panel">
+            <div class="empty-state">Cargando…</div>
+          </div>
+        </section>
+
+        <section id="page-projects" class="page">
+          <div class="section-head">
+            <p class="muted">Stacks Compose registrados bajo la raíz permitida.</p>
+            <button id="open-project-dialog" class="primary" type="button">
+              Registrar proyecto
+            </button>
+          </div>
+          <div id="projects-grid" class="project-grid">
+            <div class="empty-state panel">Cargando…</div>
+          </div>
+        </section>
+
+        <section id="page-history" class="page">
+          <div class="section-head">
+            <p class="muted">Historial local de deploy, webhook, rollback y templates.</p>
+            <select id="history-filter" aria-label="Filtrar por proyecto">
+              <option value="">Todos los proyectos</option>
+            </select>
+          </div>
+          <div id="history-content" class="panel table-panel">
+            <div class="empty-state">Cargando…</div>
+          </div>
+        </section>
+
+        <section id="page-postgres" class="page">
+          <div class="two-column postgres-layout">
+            <article class="panel form-panel">
+              <p class="eyebrow">PLANTILLA SEGURA</p>
+              <h3>Crear PostgreSQL</h3>
+              <p class="muted">
+                Crea Compose, volumen persistente, healthcheck y red privada. El puerto es opcional
+                y se enlaza solo a 127.0.0.1.
+              </p>
+              <form id="postgres-form" class="form-grid" autocomplete="off">
+                <label
+                  >Slug<input
+                    name="slug"
+                    required
+                    pattern="[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?"
+                    placeholder="storagia-db"
+                /></label>
+                <label
+                  >Nombre<input
+                    name="name"
+                    required
+                    maxlength="100"
+                    placeholder="Storagia PostgreSQL"
+                /></label>
+                <label>Base de datos<input name="database" required value="app" /></label>
+                <label>Usuario<input name="username" required value="app" /></label>
+                <label class="span-2"
+                  >Contraseña opcional<input
+                    name="password"
+                    type="password"
+                    minlength="12"
+                    placeholder="Vacío = generar 48 caracteres hex"
+                /></label>
+                <label
+                  >RAM máxima (MB)<input
+                    name="memory_mb"
+                    type="number"
+                    min="128"
+                    max="8192"
+                    value="512"
+                /></label>
+                <label
+                  >Puerto local opcional<input
+                    name="published_port"
+                    type="number"
+                    min="1"
+                    max="65535"
+                    placeholder="5432"
+                /></label>
+                <button class="primary span-2" type="submit">Crear y desplegar</button>
+              </form>
+            </article>
+            <article class="panel result-panel">
+              <p class="eyebrow">RESULTADO</p>
+              <h3>Credenciales</h3>
+              <div id="postgres-result" class="empty-state">
+                Aquí aparecerán una sola vez la contraseña y la URI generadas.
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section id="page-settings" class="page">
+          <div id="system-content" class="settings-grid">
+            <div class="empty-state panel">Cargando…</div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="project-dialog">
+      <form id="project-form" class="dialog-card" autocomplete="off">
+        <div class="dialog-head">
+          <div>
+            <p class="eyebrow">COMPOSE</p>
+            <h3>Registrar proyecto</h3>
+          </div>
+          <button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button>
+        </div>
+        <p class="muted">
+          Los archivos ya deben existir bajo <code id="allowed-root-hint">/opt/tinkiva/apps</code>.
+        </p>
+        <div class="form-grid">
+          <label
+            >Slug<input
+              name="slug"
+              required
+              pattern="[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?"
+              placeholder="storagia-api"
+          /></label>
+          <label
+            >Nombre<input name="name" required maxlength="100" placeholder="Storagia API"
+          /></label>
+          <label class="span-2"
+            >Archivo Compose<input name="compose_file" required placeholder="storagia/compose.yaml"
+          /></label>
+          <label class="span-2"
+            >Archivo .env opcional<input name="env_file" placeholder="storagia/.env"
+          /></label>
+          <label>Variable de imagen<input name="image_env" placeholder="APP_IMAGE" /></label>
+          <label>Rama permitida<input name="branch" placeholder="main" /></label>
+          <label class="span-2"
+            >Token webhook opcional<input
+              name="webhook_token"
+              placeholder="Vacío = generar automáticamente"
+          /></label>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" class="ghost" data-close-dialog>Cancelar</button
+          ><button type="submit" class="primary">Registrar</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="deploy-dialog">
+      <form id="deploy-form" class="dialog-card" autocomplete="off">
+        <div class="dialog-head">
+          <div>
+            <p class="eyebrow">DESPLIEGUE</p>
+            <h3 id="deploy-title">Desplegar proyecto</h3>
+          </div>
+          <button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button>
+        </div>
+        <input name="slug" type="hidden" />
+        <div class="form-grid one-column">
+          <label
+            >Imagen inmutable<input name="image" placeholder="ghcr.io/usuario/app:sha"
+          /></label>
+          <label>Rama<input name="branch" placeholder="main" /></label>
+          <label
+            >Commit opcional<input name="commit" maxlength="128" placeholder="a1b2c3d"
+          /></label>
+        </div>
+        <p class="muted small-text">
+          Al enviar una imagen, el proyecto debe tener <code>env_file</code> e
+          <code>image_env</code>. Si falla, se intenta restaurar la imagen anterior.
+        </p>
+        <div class="dialog-actions">
+          <button type="button" class="ghost" data-close-dialog>Cancelar</button
+          ><button type="submit" class="primary">Desplegar</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="logs-dialog" class="logs-dialog">
+      <div class="dialog-card wide">
+        <div class="dialog-head">
+          <div>
+            <p class="eyebrow">LOGS</p>
+            <h3 id="logs-title">Logs</h3>
+          </div>
+          <div class="dialog-head-actions">
+            <button id="refresh-logs" class="ghost" type="button">Actualizar</button
+            ><button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">
+              ×
+            </button>
+          </div>
+        </div>
+        <pre id="logs-output" tabindex="0">Cargando…</pre>
+      </div>
+    </dialog>
+
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  </body>
+</html>

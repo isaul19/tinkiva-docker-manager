@@ -1,0 +1,25 @@
+[package]
+name = "tinkiva-deploy-lite"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Panel de despliegue Docker ultraligero y de un solo nodo"
+license = "MIT"
+authors = ["Tinkiva"]
+
+# Intencionalmente sin dependencias externas: menor RAM, binario pequeño y build reproducible.
+[dependencies]
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"

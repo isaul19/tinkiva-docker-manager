@@ -1,0 +1,536 @@
+use crate::model::Project;
+use crate::util::{json_string, truncate_text, unique_suffix, valid_container_ref};
+use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::fs::{self, OpenOptions};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+const FIELD_SEPARATOR: char = '\u{1f}';
+
+#[derive(Clone)]
+pub struct DockerClient {
+    binary: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct DockerInfo {
+    pub available: bool,
+    pub server_version: Option<String>,
+    pub compose_version: Option<String>,
+    pub error: Option<String>,
+}
+
+impl DockerInfo {
+    pub fn to_json(&self) -> String {
+        format!(
+            concat!(
+                "{{",
+                "\"available\":{},",
+                "\"server_version\":{},",
+                "\"compose_version\":{},",
+                "\"error\":{}",
+                "}}"
+            ),
+            self.available,
+            self.server_version
+                .as_deref()
+                .map_or_else(|| "null".to_owned(), json_string),
+            self.compose_version
+                .as_deref()
+                .map_or_else(|| "null".to_owned(), json_string),
+            self.error
+                .as_deref()
+                .map_or_else(|| "null".to_owned(), json_string),
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ContainerInfo {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    pub status: String,
+    pub state: String,
+    pub ports: String,
+    pub created_at: String,
+    pub cpu: Option<String>,
+    pub memory: Option<String>,
+    pub memory_percent: Option<String>,
+    pub network_io: Option<String>,
+    pub block_io: Option<String>,
+    pub pids: Option<String>,
+}
+
+impl ContainerInfo {
+    pub fn to_json(&self) -> String {
+        format!(
+            concat!(
+                "{{",
+                "\"id\":{},",
+                "\"name\":{},",
+                "\"image\":{},",
+                "\"status\":{},",
+                "\"state\":{},",
+                "\"ports\":{},",
+                "\"created_at\":{},",
+                "\"cpu\":{},",
+                "\"memory\":{},",
+                "\"memory_percent\":{},",
+                "\"network_io\":{},",
+                "\"block_io\":{},",
+                "\"pids\":{}",
+                "}}"
+            ),
+            json_string(&self.id),
+            json_string(&self.name),
+            json_string(&self.image),
+            json_string(&self.status),
+            json_string(&self.state),
+            json_string(&self.ports),
+            json_string(&self.created_at),
+            optional_json(&self.cpu),
+            optional_json(&self.memory),
+            optional_json(&self.memory_percent),
+            optional_json(&self.network_io),
+            optional_json(&self.block_io),
+            optional_json(&self.pids),
+        )
+    }
+}
+
+fn optional_json(value: &Option<String>) -> String {
+    value
+        .as_deref()
+        .map_or_else(|| "null".to_owned(), json_string)
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandResult {
+    pub success: bool,
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub timed_out: bool,
+    pub duration_ms: u128,
+}
+
+impl CommandResult {
+    pub fn summary(&self) -> String {
+        let stdout = self.stdout.trim();
+        let stderr = self.stderr.trim();
+        let message = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else if self.timed_out {
+            "el comando agotó el tiempo de espera"
+        } else {
+            "el comando no devolvió detalles"
+        };
+        truncate_text(message, 4000)
+    }
+}
+
+impl DockerClient {
+    pub fn new(binary: PathBuf) -> Self {
+        Self { binary }
+    }
+
+    pub fn info(&self) -> DockerInfo {
+        let server = self.run(
+            ["version", "--format", "{{.Server.Version}}"],
+            None,
+            Duration::from_secs(10),
+        );
+
+        let Ok(server) = server else {
+            return DockerInfo {
+                available: false,
+                server_version: None,
+                compose_version: None,
+                error: Some("no se pudo ejecutar Docker".to_owned()),
+            };
+        };
+
+        if !server.success {
+            return DockerInfo {
+                available: false,
+                server_version: None,
+                compose_version: None,
+                error: Some(server.summary()),
+            };
+        }
+
+        let compose = self.run(
+            ["compose", "version", "--short"],
+            None,
+            Duration::from_secs(10),
+        );
+        let (compose_version, compose_error) = match compose {
+            Ok(result) if result.success => (Some(result.stdout.trim().to_owned()), None),
+            Ok(result) => (None, Some(result.summary())),
+            Err(error) => (None, Some(error)),
+        };
+
+        DockerInfo {
+            available: compose_version.is_some(),
+            server_version: Some(server.stdout.trim().to_owned()),
+            compose_version,
+            error: compose_error,
+        }
+    }
+
+    pub fn containers(&self) -> Result<Vec<ContainerInfo>, String> {
+        let separator = FIELD_SEPARATOR;
+        let format = format!(
+            "{{{{.ID}}}}{separator}{{{{.Names}}}}{separator}{{{{.Image}}}}{separator}{{{{.Status}}}}{separator}{{{{.State}}}}{separator}{{{{.Ports}}}}{separator}{{{{.CreatedAt}}}}"
+        );
+        let result = self.run(
+            ["ps", "-a", "--no-trunc", "--format", &format],
+            None,
+            Duration::from_secs(15),
+        )?;
+        if !result.success {
+            return Err(result.summary());
+        }
+
+        let mut containers = Vec::new();
+        for line in result.stdout.lines().filter(|line| !line.trim().is_empty()) {
+            let fields: Vec<&str> = line.split(separator).collect();
+            if fields.len() != 7 {
+                continue;
+            }
+            containers.push(ContainerInfo {
+                id: fields[0].to_owned(),
+                name: fields[1].to_owned(),
+                image: fields[2].to_owned(),
+                status: fields[3].to_owned(),
+                state: fields[4].to_owned(),
+                ports: fields[5].to_owned(),
+                created_at: fields[6].to_owned(),
+                cpu: None,
+                memory: None,
+                memory_percent: None,
+                network_io: None,
+                block_io: None,
+                pids: None,
+            });
+        }
+
+        let stats = self.stats().unwrap_or_default();
+        for container in &mut containers {
+            if let Some(stat) = stats.get(&container.name) {
+                container.cpu.clone_from(&stat.cpu);
+                container.memory.clone_from(&stat.memory);
+                container.memory_percent.clone_from(&stat.memory_percent);
+                container.network_io.clone_from(&stat.network_io);
+                container.block_io.clone_from(&stat.block_io);
+                container.pids.clone_from(&stat.pids);
+            }
+        }
+
+        containers.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(containers)
+    }
+
+    pub fn container_action(&self, container: &str, action: &str) -> Result<CommandResult, String> {
+        if !valid_container_ref(container) {
+            return Err("identificador de contenedor inválido".to_owned());
+        }
+        let args: Vec<&str> = match action {
+            "start" => vec!["start", container],
+            "stop" => vec!["stop", "--time", "20", container],
+            "restart" => vec!["restart", "--time", "20", container],
+            _ => return Err("acción de contenedor no permitida".to_owned()),
+        };
+        self.run(args, None, Duration::from_secs(45))
+    }
+
+    pub fn container_logs(&self, container: &str, tail: usize) -> Result<String, String> {
+        if !valid_container_ref(container) {
+            return Err("identificador de contenedor inválido".to_owned());
+        }
+        let tail = tail.clamp(10, 2000).to_string();
+        let result = self.run(
+            ["logs", "--timestamps", "--tail", &tail, container],
+            None,
+            Duration::from_secs(15),
+        )?;
+        let mut output = result.stdout;
+        if !result.stderr.trim().is_empty() {
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(&result.stderr);
+        }
+        if result.success || !output.trim().is_empty() {
+            Ok(truncate_text(&output, 2 * 1024 * 1024))
+        } else {
+            Err(result.summary())
+        }
+    }
+
+    pub fn compose_logs(&self, project: &Project, tail: usize) -> Result<String, String> {
+        let tail = tail.clamp(10, 2000).to_string();
+        let compose = project.compose_file.to_string_lossy().into_owned();
+        let result = self.run(
+            [
+                "compose",
+                "-f",
+                &compose,
+                "logs",
+                "--no-color",
+                "--timestamps",
+                "--tail",
+                &tail,
+            ],
+            project.compose_file.parent(),
+            Duration::from_secs(20),
+        )?;
+        let mut output = result.stdout;
+        if !result.stderr.trim().is_empty() {
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(&result.stderr);
+        }
+        if result.success || !output.trim().is_empty() {
+            Ok(truncate_text(&output, 2 * 1024 * 1024))
+        } else {
+            Err(result.summary())
+        }
+    }
+
+    pub fn validate_compose(&self, compose_file: &Path) -> Result<(), String> {
+        let compose = compose_file.to_string_lossy().into_owned();
+        let result = self.run(
+            ["compose", "-f", &compose, "config", "--quiet"],
+            compose_file.parent(),
+            Duration::from_secs(20),
+        )?;
+        if result.success {
+            Ok(())
+        } else {
+            Err(result.summary())
+        }
+    }
+
+    pub fn deploy(&self, project: &Project) -> Result<CommandResult, String> {
+        let compose = project.compose_file.to_string_lossy().into_owned();
+        let working_directory = project.compose_file.parent();
+
+        let pull = self.run(
+            ["compose", "-f", &compose, "pull", "--quiet"],
+            working_directory,
+            Duration::from_secs(300),
+        )?;
+        if !pull.success {
+            return Ok(pull);
+        }
+
+        let mut up = self.run(
+            [
+                "compose",
+                "-f",
+                &compose,
+                "up",
+                "-d",
+                "--remove-orphans",
+            ],
+            working_directory,
+            Duration::from_secs(300),
+        )?;
+        if !pull.stdout.trim().is_empty() {
+            up.stdout = format!("{}\n{}", pull.stdout.trim(), up.stdout.trim());
+        }
+        if !pull.stderr.trim().is_empty() {
+            up.stderr = format!("{}\n{}", pull.stderr.trim(), up.stderr.trim());
+        }
+        up.duration_ms = up.duration_ms.saturating_add(pull.duration_ms);
+        Ok(up)
+    }
+
+    pub fn ensure_network(&self, network: &str) -> Result<(), String> {
+        if !valid_container_ref(network) {
+            return Err("nombre de red inválido".to_owned());
+        }
+        let inspect = self.run(
+            ["network", "inspect", network],
+            None,
+            Duration::from_secs(10),
+        )?;
+        if inspect.success {
+            return Ok(());
+        }
+        let create = self.run(
+            ["network", "create", network],
+            None,
+            Duration::from_secs(20),
+        )?;
+        if create.success {
+            Ok(())
+        } else {
+            Err(create.summary())
+        }
+    }
+
+    fn stats(&self) -> Result<HashMap<String, ContainerStats>, String> {
+        let separator = FIELD_SEPARATOR;
+        let format = format!(
+            "{{{{.Name}}}}{separator}{{{{.CPUPerc}}}}{separator}{{{{.MemUsage}}}}{separator}{{{{.MemPerc}}}}{separator}{{{{.NetIO}}}}{separator}{{{{.BlockIO}}}}{separator}{{{{.PIDs}}}}"
+        );
+        let result = self.run(
+            [
+                "stats",
+                "--no-stream",
+                "--all",
+                "--no-trunc",
+                "--format",
+                &format,
+            ],
+            None,
+            Duration::from_secs(20),
+        )?;
+        if !result.success {
+            return Err(result.summary());
+        }
+
+        let mut stats = HashMap::new();
+        for line in result.stdout.lines().filter(|line| !line.trim().is_empty()) {
+            let fields: Vec<&str> = line.split(separator).collect();
+            if fields.len() != 7 {
+                continue;
+            }
+            stats.insert(
+                fields[0].to_owned(),
+                ContainerStats {
+                    cpu: non_empty(fields[1]),
+                    memory: non_empty(fields[2]),
+                    memory_percent: non_empty(fields[3]),
+                    network_io: non_empty(fields[4]),
+                    block_io: non_empty(fields[5]),
+                    pids: non_empty(fields[6]),
+                },
+            );
+        }
+        Ok(stats)
+    }
+
+    fn run<I, S>(
+        &self,
+        arguments: I,
+        working_directory: Option<&Path>,
+        timeout: Duration,
+    ) -> Result<CommandResult, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let temporary_directory = std::env::temp_dir();
+        let suffix = unique_suffix();
+        let stdout_path = temporary_directory.join(format!("tdl-{suffix}.stdout"));
+        let stderr_path = temporary_directory.join(format!("tdl-{suffix}.stderr"));
+
+        let stdout_file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&stdout_path)
+            .map_err(|error| format!("no se pudo crear salida temporal: {error}"))?;
+        let stderr_file = match OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&stderr_path)
+        {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = fs::remove_file(&stdout_path);
+                return Err(format!("no se pudo crear error temporal: {error}"));
+            }
+        };
+
+        let mut command = Command::new(&self.binary);
+        command
+            .args(arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout_file))
+            .stderr(Stdio::from(stderr_file))
+            .env("DOCKER_CLI_HINTS", "false")
+            .env("COMPOSE_ANSI", "never");
+        if let Some(directory) = working_directory {
+            command.current_dir(directory);
+        }
+
+        let started = Instant::now();
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = fs::remove_file(&stdout_path);
+                let _ = fs::remove_file(&stderr_path);
+                return Err(format!(
+                    "no se pudo ejecutar {}: {error}",
+                    self.binary.display()
+                ));
+            }
+        };
+
+        let mut timed_out = false;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if started.elapsed() < timeout => {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Ok(None) => {
+                    timed_out = true;
+                    let _ = child.kill();
+                    break child
+                        .wait()
+                        .map_err(|error| format!("no se pudo finalizar Docker: {error}"))?;
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = fs::remove_file(&stdout_path);
+                    let _ = fs::remove_file(&stderr_path);
+                    return Err(format!("no se pudo esperar el comando Docker: {error}"));
+                }
+            }
+        };
+
+        let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        let _ = fs::remove_file(&stdout_path);
+        let _ = fs::remove_file(&stderr_path);
+
+        Ok(CommandResult {
+            success: status.success() && !timed_out,
+            code: status.code(),
+            stdout,
+            stderr,
+            timed_out,
+            duration_ms: started.elapsed().as_millis(),
+        })
+    }
+}
+
+#[derive(Default)]
+struct ContainerStats {
+    cpu: Option<String>,
+    memory: Option<String>,
+    memory_percent: Option<String>,
+    network_io: Option<String>,
+    block_io: Option<String>,
+    pids: Option<String>,
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value != "--").then(|| value.to_owned())
+}

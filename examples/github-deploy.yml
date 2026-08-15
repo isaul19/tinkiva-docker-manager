@@ -1,0 +1,56 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # Para una EC2 t4g usa linux/arm64. Para x86 cambia a linux/amd64.
+      - uses: docker/setup-qemu-action@v4.2.0
+      - uses: docker/setup-buildx-action@v4.2.0
+
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push immutable image
+        uses: docker/build-push-action@v7.2.0
+        with:
+          context: .
+          push: true
+          platforms: linux/arm64
+          tags: ghcr.io/${{ github.repository_owner }}/mi-api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy through Tinkiva Deploy Lite
+        env:
+          WEBHOOK_URL: ${{ secrets.TDL_WEBHOOK_URL }}
+          WEBHOOK_TOKEN: ${{ secrets.TDL_WEBHOOK_TOKEN }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/mi-api:${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          curl --fail-with-body --silent --show-error \
+            --max-time 720 \
+            -H "X-Tinkiva-Token: $WEBHOOK_TOKEN" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "image=$IMAGE" \
+            --data-urlencode "branch=$BRANCH" \
+            --data-urlencode "commit=$COMMIT" \
+            "$WEBHOOK_URL"

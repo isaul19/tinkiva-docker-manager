@@ -1,0 +1,19 @@
+services:
+  api:
+    image: ${APP_IMAGE:?Define APP_IMAGE en .env}
+    container_name: storagia-api
+    restart: unless-stopped
+    env_file:
+      - runtime.env
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - tinkiva
+    mem_limit: 384m
+    cpus: 0.75
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  tinkiva:
+    external: true
