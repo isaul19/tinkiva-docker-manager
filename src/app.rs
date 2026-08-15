@@ -50,7 +50,7 @@ impl Config {
                 .or_else(|| file_settings.get(key).cloned())
         };
 
-        let bind = setting("TDM_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_owned());
+        let bind = setting("TDM_BIND").unwrap_or_else(|| "127.0.0.1:8787".to_owned());
         let admin_token = setting("TDM_ADMIN_TOKEN")
             .ok_or_else(|| "TDM_ADMIN_TOKEN es obligatorio".to_owned())?;
         if admin_token.len() < 32 || admin_token.len() > 256 || admin_token.chars().any(char::is_whitespace)
@@ -60,10 +60,10 @@ impl Config {
 
         let data_dir = PathBuf::from(
             setting("TDM_DATA_DIR")
-                .unwrap_or_else(|_| "/var/lib/tinkiva-docker-manager".to_owned()),
+                .unwrap_or_else(|| "/var/lib/tinkiva-docker-manager".to_owned()),
         );
         let allowed_root = PathBuf::from(
-            setting("TDM_ALLOWED_ROOT").unwrap_or_else(|_| "/opt/tinkiva/apps".to_owned()),
+            setting("TDM_ALLOWED_ROOT").unwrap_or_else(|| "/opt/tinkiva/apps".to_owned()),
         );
         fs::create_dir_all(&data_dir)
             .map_err(|error| format!("no se pudo crear {}: {error}", data_dir.display()))?;
@@ -94,7 +94,7 @@ impl Config {
             data_dir,
             allowed_root,
             docker_binary: PathBuf::from(
-                setting("TDM_DOCKER_BIN").unwrap_or_else(|_| "docker".to_owned()),
+                setting("TDM_DOCKER_BIN").unwrap_or_else(|| "docker".to_owned()),
             ),
             workers,
             max_history,
