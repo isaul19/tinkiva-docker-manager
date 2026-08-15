@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.0 — 2026-08-15
+
+### Acceso externo opcional
+
+- Nuevo interruptor **«Permitir acceso externo al VPS»** en recursos de imagen y
+  repositorio: desactivado publica en `127.0.0.1` (como siempre), activado escucha en
+  `0.0.0.0` con aviso de que el firewall o Security Group debe abrirse a mano.
+- Las bases de datos siguen siempre en `127.0.0.1`; exponer un PostgreSQL o Redis
+  público por accidente no es un clic.
+- El panel aclara que solo cambia el bind de Docker: no toca el Security Group de AWS.
+
+### Detección de puertos
+
+- El Dockerfile del repositorio ahora se lee buscando `EXPOSE`: si declara el puerto,
+  los campos pueden quedar vacíos.
+- Corregido el orden de autodetección en repositorios: el puerto del VPS por defecto se
+  resuelve después de detectar el runtime; antes un flujo automático podía dejar el
+  servicio como `3000/tcp` sin publicar en el host.
+
+### Interfaz
+
+- «Puerto local» pasa a llamarse **«Puerto del VPS»** y los selectores muestran un
+  chevron propio en vez de la flecha nativa.
+
 ## 0.6.1 — 2026-08-15
 
 - En recursos de imagen y repositorio, dejar el **puerto local vacío** publica el
