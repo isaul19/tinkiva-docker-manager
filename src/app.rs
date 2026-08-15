@@ -487,7 +487,38 @@ impl App {
                     "[{}]",
                     projects
                         .iter()
-                        .map(|project| project.to_json(true))
+                        .map(|project| {
+                            let runtime_status = self
+                                .docker
+                                .project_status(project)
+                                .unwrap_or("error");
+                            let rollback_target = self
+                                .store
+                                .rollback_target(&project.slug)
+                                .ok()
+                                .flatten();
+                            let rollback_configured =
+                                project.env_file.is_some() && project.image_env.is_some();
+                            let has_previous_image =
+                                rollback_target.as_deref() != project.current_image.as_deref();
+                            let can_rollback =
+                                rollback_configured && rollback_target.is_some() && has_previous_image;
+                            let rollback_reason = if !rollback_configured {
+                                "Este recurso no usa una imagen configurable mediante archivo .env."
+                            } else if rollback_target.is_none() || !has_previous_image {
+                                "Todavía no hay una imagen anterior disponible."
+                            } else {
+                                ""
+                            };
+                            let project_json = project.to_json(true);
+                            format!(
+                                "{},\"runtime_status\":{},\"can_rollback\":{},\"rollback_reason\":{}}}",
+                                project_json.trim_end_matches('}'),
+                                json_string(runtime_status),
+                                can_rollback,
+                                json_string(rollback_reason),
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join(",")
                 ),
@@ -702,11 +733,20 @@ impl App {
             Ok(None) => return json_error(404, "proyecto no encontrado"),
             Err(error) => return json_error(500, &error),
         };
+        if project.env_file.is_none() || project.image_env.is_none() {
+            return json_error(
+                409,
+                "rollback no disponible: este recurso no usa una imagen configurable mediante archivo .env",
+            );
+        }
         let target = match self.store.rollback_target(slug) {
             Ok(Some(image)) => image,
             Ok(None) => return json_error(409, "no existe una imagen anterior para rollback"),
             Err(error) => return json_error(500, &error),
         };
+        if project.current_image.as_deref() == Some(target.as_str()) {
+            return json_error(409, "no existe una imagen anterior distinta para rollback");
+        }
 
         match self.perform_deploy(
             project.clone(),

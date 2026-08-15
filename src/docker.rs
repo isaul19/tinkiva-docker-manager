@@ -202,6 +202,26 @@ impl DockerClient {
         Ok(containers)
     }
 
+    /// Estado agregado de los servicios que pertenecen a un proyecto Compose.
+    /// Se consulta por archivo para no depender del nombre que Compose dedujo
+    /// para el stack (que no siempre coincide con el slug del panel).
+    pub fn project_status(&self, project: &Project) -> Result<&'static str, String> {
+        let compose = project.compose_file.to_string_lossy().into_owned();
+        let separator = FIELD_SEPARATOR;
+        let format = format!(
+            "{{{{.State}}}}{separator}{{{{.Health}}}}{separator}{{{{.ExitCode}}}}"
+        );
+        let result = self.run(
+            ["compose", "-f", &compose, "ps", "-a", "--format", &format],
+            project.compose_file.parent(),
+            Duration::from_secs(15),
+        )?;
+        if !result.success {
+            return Err(result.summary());
+        }
+        Ok(summarize_project_status(&result.stdout))
+    }
+
     pub fn container_action(&self, container: &str, action: &str) -> Result<CommandResult, String> {
         if !valid_container_ref(container) {
             return Err("identificador de contenedor inválido".to_owned());
@@ -458,6 +478,80 @@ impl DockerClient {
             &[("DOCKER_CLI_HINTS", "false"), ("COMPOSE_ANSI", "never")],
             timeout
         )
+    }
+}
+
+fn summarize_project_status(output: &str) -> &'static str {
+    let services: Vec<Vec<&str>> = output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.split(FIELD_SEPARATOR).collect())
+        .collect();
+
+    if services.is_empty() {
+        return "stopped";
+    }
+
+    let all_running = services.iter().all(|fields| {
+        fields.first().is_some_and(|state| state.eq_ignore_ascii_case("running"))
+            && !fields
+                .get(1)
+                .is_some_and(|health| health.eq_ignore_ascii_case("unhealthy"))
+    });
+    if all_running {
+        return "running";
+    }
+
+    let has_error = services.iter().any(|fields| {
+        let state = fields.first().copied().unwrap_or_default();
+        let health = fields.get(1).copied().unwrap_or_default();
+        let exit_code = fields.get(2).copied().unwrap_or_default();
+        health.eq_ignore_ascii_case("unhealthy")
+            || matches!(state.to_ascii_lowercase().as_str(), "dead" | "restarting")
+            || (state.eq_ignore_ascii_case("exited") && exit_code != "0")
+    });
+    let partially_running = services.iter().any(|fields| {
+        fields
+            .first()
+            .is_some_and(|state| state.eq_ignore_ascii_case("running"))
+    });
+    if has_error || partially_running {
+        "error"
+    } else {
+        "stopped"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summarizes_compose_service_states() {
+        let separator = FIELD_SEPARATOR;
+        assert_eq!(summarize_project_status(""), "stopped");
+        assert_eq!(
+            summarize_project_status(&format!("running{separator}healthy{separator}0\n")),
+            "running"
+        );
+        assert_eq!(
+            summarize_project_status(&format!("exited{separator}{separator}0\n")),
+            "stopped"
+        );
+        assert_eq!(
+            summarize_project_status(&format!("exited{separator}{separator}1\n")),
+            "error"
+        );
+        assert_eq!(
+            summarize_project_status(&format!("running{separator}unhealthy{separator}0\n")),
+            "error"
+        );
+        assert_eq!(
+            summarize_project_status(&format!(
+                "running{separator}healthy{separator}0\nexited{separator}{separator}0\n"
+            )),
+            "error"
+        );
     }
 }
 

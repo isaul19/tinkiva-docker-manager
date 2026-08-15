@@ -121,6 +121,9 @@ const API = {
       engine: 'postgres',
       repository: null,
       installation_id: null,
+      runtime_status: 'running',
+      can_rollback: false,
+      rollback_reason: 'Este recurso no usa una imagen configurable mediante archivo .env.',
     },
     {
       slug: 'storagia-api',
@@ -136,6 +139,9 @@ const API = {
       engine: null,
       repository: 'isaul19/storagia',
       installation_id: 42,
+      runtime_status: 'stopped',
+      can_rollback: true,
+      rollback_reason: '',
     },
   ],
   '/api/history': [
@@ -317,6 +323,9 @@ test('la vista de recursos distingue base de datos y repositorio', async () => {
   assert.match(text, /Storagia API/);
   assert.match(text, /Repositorio/);
   assert.match(text, /isaul19\/storagia/);
+  assert.match(text, /Corriendo/);
+  assert.match(text, /Apagado/);
+  assert.match(text, /Rollback no disponible/);
 });
 
 test('la vista de despliegues formatea duración y estado', async () => {

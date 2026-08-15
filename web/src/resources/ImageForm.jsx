@@ -132,6 +132,15 @@ export function ImageForm({ onCreated }) {
   const update = (key) => (event) =>
     setForm((current) => ({ ...current, [key]: event.currentTarget.value }));
 
+  const onName = (event) => {
+    const value = event.currentTarget.value;
+    setForm((current) => ({
+      ...current,
+      name: value,
+      slug: slugTouched ? current.slug : toSlug(value),
+    }));
+  };
+
   const pick = async (name) => {
     const lastSlash = name.lastIndexOf('/');
     const lastColon = name.lastIndexOf(':');
@@ -200,9 +209,9 @@ export function ImageForm({ onCreated }) {
 
       <FormGrid>
         <Field label="Nombre">
-          <Input value={form.name} onInput={update('name')} required maxLength={100} />
+          <Input value={form.name} onInput={onName} required maxLength={100} />
         </Field>
-        <Field label="Slug">
+        <Field label="Slug" hint="Se genera desde el nombre; puedes editarlo si lo necesitas.">
           <Input
             value={form.slug}
             onInput={(event) => {

@@ -960,7 +960,7 @@ code {
 }
 
 .form-grid-2 {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .form-grid-1 {
@@ -1150,6 +1150,13 @@ code {
   min-width: 0;
 }
 
+.resource-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
 .resource-meta {
   display: grid;
   gap: 0.35rem;
@@ -1198,6 +1205,20 @@ code {
   gap: 0.4rem;
   padding-top: 0.85rem;
   border-top: 1px solid var(--line-soft);
+}
+
+.resource-capability-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  color: var(--faint);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.resource-capability-note svg {
+  flex: 0 0 auto;
+  margin-top: 0.08rem;
 }
 
 .resource-actions .btn-danger {
@@ -1559,6 +1580,12 @@ code {
 
   .truncate {
     max-width: 22ch;
+  }
+}
+
+@media (max-width: 560px) {
+  .form-grid-2 {
+    grid-template-columns: 1fr;
   }
 }
 

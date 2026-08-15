@@ -11,7 +11,7 @@ import {
 } from 'lucide-preact';
 import { api } from '../lib/api.js';
 import { useApp } from '../lib/context.js';
-import { useAsync } from '../lib/hooks.js';
+import { useAsync, usePolling } from '../lib/hooks.js';
 import { formatRelative } from '../lib/format.js';
 import { BrandIcon, hasBrand } from '../ui/BrandIcon.jsx';
 import { AsyncBlock, Badge, Button, EmptyState, Panel } from '../ui/Primitives.jsx';
@@ -25,6 +25,12 @@ const KIND_LABEL = {
   image: 'Imagen',
   repository: 'Repositorio',
   compose: 'Compose',
+};
+
+const STATUS = {
+  running: { label: 'Corriendo', tone: 'ok' },
+  stopped: { label: 'Apagado', tone: 'neutral' },
+  error: { label: 'Error · se detuvo', tone: 'danger' },
 };
 
 function ResourceIcon({ project }) {
@@ -47,6 +53,7 @@ export function Resources() {
   const [busy, setBusy] = useState(null);
 
   const projects = useAsync(() => api.get('/api/projects'), [refreshToken]);
+  usePolling(projects.reload, 15_000);
 
   const rollback = async (project) => {
     setBusy(`${project.slug}:rollback`);
@@ -136,7 +143,12 @@ export function Resources() {
                     <strong>{project.name}</strong>
                     <span class="muted mono small">{project.slug}</span>
                   </div>
-                  <Badge tone="neutral">{KIND_LABEL[project.kind] || project.kind}</Badge>
+                  <div class="resource-badges">
+                    <Badge tone={STATUS[project.runtime_status]?.tone || 'neutral'}>
+                      {STATUS[project.runtime_status]?.label || 'Apagado'}
+                    </Badge>
+                    <Badge tone="neutral">{KIND_LABEL[project.kind] || project.kind}</Badge>
+                  </div>
                 </header>
 
                 <dl class="resource-meta">
@@ -171,6 +183,13 @@ export function Resources() {
                   <CopyValue label="Token" value={project.webhook_token} masked />
                 </details>
 
+                {!project.can_rollback && project.rollback_reason ? (
+                  <p class="resource-capability-note">
+                    <Undo2 size={13} />
+                    <span>Rollback no disponible: {project.rollback_reason}</span>
+                  </p>
+                ) : null}
+
                 <footer class="resource-actions">
                   <Button
                     variant="primary"
@@ -179,7 +198,7 @@ export function Resources() {
                     loading={busy === `${project.slug}:deploy`}
                     onClick={() => setDeployFor(project)}
                   >
-                    Desplegar
+                    {project.runtime_status === 'running' ? 'Redesplegar' : 'Desplegar'}
                   </Button>
                   <Button size="sm" icon={FileText} onClick={() => setLogsFor(project)}>
                     Logs
@@ -188,8 +207,9 @@ export function Resources() {
                     size="sm"
                     icon={Undo2}
                     loading={busy === `${project.slug}:rollback`}
+                    disabled={!project.can_rollback}
                     onClick={() => rollback(project)}
-                    title="Volver a la imagen anterior"
+                    title={project.can_rollback ? 'Volver a la imagen anterior' : project.rollback_reason}
                   >
                     Rollback
                   </Button>

@@ -7,6 +7,8 @@ if [[ "$args" == *" version --format "* ]]; then
   printf '27.5.1\n'
 elif [[ "$args" == *" compose version "* ]]; then
   printf 'Docker Compose version v2.32.4\n'
+elif [[ "$args" == *" compose "*" ps -a "* ]]; then
+  printf 'running%shealthy%s0\n' "$sep" "$sep"
 elif [[ "$args" == *" ps -a "* ]]; then
   printf 'abc123%sapp%sghcr.io/example/app:one%sUp 10 minutes%srunning%s127.0.0.1:3000->3000/tcp%s2026-08-14 10:00:00 -0500 -05\n' "$sep" "$sep" "$sep" "$sep" "$sep" "$sep"
   printf 'def456%spostgres%spostgres:17-alpine%sUp 10 minutes (healthy)%srunning%s5432/tcp%s2026-08-14 10:00:00 -0500 -05\n' "$sep" "$sep" "$sep" "$sep" "$sep" "$sep"
