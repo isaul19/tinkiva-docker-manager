@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5 — 2026-08-14
+
+- Carpeta de estado renombrada a `tinkiva-docker-manager/` (migración automática desde `tinkiva/`).
+- Limpieza de `tinkiva.pid` residual y de binarios de instalación descargados tras el asistente.
+
 ## 0.1.4 — 2026-08-14
 
 - Comando `tinkivadm logs [N] [-f]`: últimas N líneas del log y seguimiento en vivo.
