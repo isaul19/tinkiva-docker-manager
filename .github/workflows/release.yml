@@ -83,4 +83,5 @@ jobs:
             dist/* \
             --title "${{ github.ref_name }}" \
             --generate-notes \
-            --verify-tag
+            --verify-tag \
+          || gh release upload "${{ github.ref_name }}" dist/* --clobber
