@@ -144,7 +144,7 @@ impl Store {
 }
 
 fn serialize_state(state: &PersistedState) -> String {
-    let mut output = format!("TDM1\t{}\n", state.next_deployment_id);
+    let mut output = format!("TDM2\t{}\n", state.next_deployment_id);
 
     for project in &state.projects {
         let fields = [
@@ -164,6 +164,12 @@ fn serialize_state(state: &PersistedState) -> String {
             encode_field(&project.webhook_token),
             encode_field(project.current_image.as_deref().unwrap_or_default()),
             project.created_at.to_string(),
+            encode_field(&project.kind),
+            encode_field(project.engine.as_deref().unwrap_or_default()),
+            encode_field(project.repository.as_deref().unwrap_or_default()),
+            project
+                .installation_id
+                .map_or_else(String::new, |id| id.to_string()),
         ];
         output.push_str(&fields.join("\t"));
         output.push('\n');
@@ -195,7 +201,9 @@ fn parse_state(contents: &str) -> Result<PersistedState, String> {
     let mut lines = contents.lines();
     let header = lines.next().ok_or_else(|| "estado vacío".to_owned())?;
     let mut header_fields = header.split('\t');
-    if header_fields.next() != Some("TDM1") {
+    // TDM1 no tenía tipo de proyecto ni origen GitHub; se sigue leyendo tal cual
+    // y se reescribe como TDM2 en el primer guardado.
+    if !matches!(header_fields.next(), Some("TDM1" | "TDM2")) {
         return Err("formato de estado no reconocido".to_owned());
     }
     let next_deployment_id = header_fields
@@ -234,8 +242,12 @@ fn parse_state(contents: &str) -> Result<PersistedState, String> {
 }
 
 fn parse_project(fields: &[&str]) -> Result<Project, String> {
-    if fields.len() != 10 {
-        return Err(format!("proyecto con {} campos; se esperaban 10", fields.len()));
+    // 10 campos = formato TDM1; 14 = TDM2 con tipo de recurso y origen GitHub.
+    if fields.len() != 10 && fields.len() != 14 {
+        return Err(format!(
+            "proyecto con {} campos; se esperaban 10 o 14",
+            fields.len()
+        ));
     }
 
     Ok(Project {
@@ -250,6 +262,25 @@ fn parse_project(fields: &[&str]) -> Result<Project, String> {
         created_at: fields[9]
             .parse::<u64>()
             .map_err(|_| "fecha de proyecto inválida".to_owned())?,
+        kind: match fields.get(10) {
+            Some(raw) => optional_string(raw)?.unwrap_or_else(|| crate::model::KIND_COMPOSE.to_owned()),
+            None => crate::model::KIND_COMPOSE.to_owned(),
+        },
+        engine: match fields.get(11) {
+            Some(raw) => optional_string(raw)?,
+            None => None,
+        },
+        repository: match fields.get(12) {
+            Some(raw) => optional_string(raw)?,
+            None => None,
+        },
+        installation_id: match fields.get(13).map(|raw| raw.trim()) {
+            Some(raw) if !raw.is_empty() => Some(
+                raw.parse::<u64>()
+                    .map_err(|_| "installation_id inválido".to_owned())?,
+            ),
+            _ => None,
+        },
     })
 }
 
@@ -309,6 +340,10 @@ mod tests {
                 webhook_token: "abc123".to_owned(),
                 current_image: Some("ghcr.io/demo/api:sha".to_owned()),
                 created_at: 10,
+                kind: crate::model::KIND_REPOSITORY.to_owned(),
+                engine: None,
+                repository: Some("isaul19/demo".to_owned()),
+                installation_id: Some(4242),
             }],
             deployments: vec![Deployment {
                 id: 8,
@@ -329,5 +364,24 @@ mod tests {
         assert_eq!(decoded.next_deployment_id, state.next_deployment_id);
         assert_eq!(decoded.projects, state.projects);
         assert_eq!(decoded.deployments, state.deployments);
+    }
+
+    #[test]
+    fn legacy_tdm1_state_still_loads() {
+        let legacy = concat!(
+            "TDM1\t3\n",
+            "P\tdemo-api\tDemo%20API\t/opt/tinkiva/apps/demo/compose.yaml\t",
+            "/opt/tinkiva/apps/demo/.env\tAPP_IMAGE\tmain\ttok\tghcr.io/demo/api:1\t10\n"
+        );
+        let decoded = parse_state(legacy).unwrap();
+        let project = &decoded.projects[0];
+
+        assert_eq!(project.slug, "demo-api");
+        assert_eq!(project.name, "Demo API");
+        assert_eq!(project.kind, crate::model::KIND_COMPOSE);
+        assert_eq!(project.repository, None);
+        assert_eq!(project.installation_id, None);
+        // Al reescribirlo queda en TDM2 sin perder nada.
+        assert!(serialize_state(&decoded).starts_with("TDM2\t3\n"));
     }
 }

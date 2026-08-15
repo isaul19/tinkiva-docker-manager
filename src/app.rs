@@ -1,15 +1,19 @@
-use crate::docker::{CommandResult, DockerClient};
+use crate::docker::DockerClient;
+use crate::git::GitClient;
+use crate::github::GitHub;
 use crate::http::{Request, Response};
-use crate::metrics::{
-    collect_processes, processes_to_json, HostMetrics,
-};
-use crate::model::{Deployment, Project};
+use crate::json::Json;
+use crate::metrics::{collect_processes, processes_to_json, HostMetrics};
+use crate::model::{Deployment, Project, KIND_DATABASE, KIND_IMAGE, KIND_REPOSITORY};
+use crate::proc::CommandResult;
 use crate::store::Store;
+use crate::templates::{self, GeneratedResource};
 use crate::util::{
-    atomic_write, canonical_existing_within, constant_time_eq, json_string, now_unix,
-    random_hex, read_env_value, remove_env_key, set_env_value, valid_container_ref,
-    valid_db_identifier, valid_display_name, valid_env_key, valid_image_ref, valid_slug,
+    atomic_write, canonical_existing_within, constant_time_eq, json_string, now_unix, random_hex,
+    read_env_value, remove_env_key, set_env_value, valid_container_ref, valid_db_identifier,
+    valid_display_name, valid_env_key, valid_image_ref, valid_slug,
 };
+use crate::{net, registry};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -19,8 +23,8 @@ use std::sync::{Mutex, TryLockError};
 use std::time::Instant;
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
-const APP_JS: &str = include_str!("../web/app.js");
-const STYLES_CSS: &str = include_str!("../web/styles.css");
+const APP_JS: &str = include_str!("../web/dist/app.js");
+const STYLES_CSS: &str = include_str!("../web/dist/app.css");
 const FAVICON_SVG: &str = include_str!("../web/favicon.svg");
 
 #[derive(Clone, Debug)]
@@ -30,6 +34,10 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub allowed_root: PathBuf,
     pub docker_binary: PathBuf,
+    pub git_binary: PathBuf,
+    /// URL pública del panel; solo hace falta si vive detrás de un proxy con
+    /// otro nombre de host, porque GitHub debe poder volver aquí.
+    pub public_url: Option<String>,
     pub workers: usize,
     pub max_history: usize,
 }
@@ -84,6 +92,9 @@ impl Config {
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(200)
             .clamp(10, 10_000);
+        let public_url = setting("TDM_PUBLIC_URL")
+            .map(|value| value.trim().trim_end_matches('/').to_owned())
+            .filter(|value| value.starts_with("http://") || value.starts_with("https://"));
 
         Ok(Self {
             bind,
@@ -93,9 +104,29 @@ impl Config {
             docker_binary: PathBuf::from(
                 setting("TDM_DOCKER_BIN").unwrap_or_else(|| "docker".to_owned()),
             ),
+            git_binary: PathBuf::from(setting("TDM_GIT_BIN").unwrap_or_else(|| "git".to_owned())),
+            public_url,
             workers,
             max_history,
         })
+    }
+}
+
+/// Herramientas externas detectadas al arrancar. La interfaz las usa para
+/// desactivar funciones en lugar de dejar que fallen a mitad de camino.
+#[derive(Clone, Copy, Debug)]
+struct Capabilities {
+    curl: bool,
+    openssl: bool,
+    git: bool,
+}
+
+impl Capabilities {
+    fn to_json(self) -> String {
+        format!(
+            "{{\"curl\":{},\"openssl\":{},\"git\":{}}}",
+            self.curl, self.openssl, self.git
+        )
     }
 }
 
@@ -103,6 +134,9 @@ pub struct App {
     config: Config,
     store: Store,
     docker: DockerClient,
+    git: GitClient,
+    github: GitHub,
+    capabilities: Capabilities,
     deploy_lock: Mutex<()>,
     started_at: u64,
 }
@@ -110,11 +144,22 @@ pub struct App {
 impl App {
     pub fn new(config: Config) -> Result<Self, String> {
         let store = Store::load(config.data_dir.join("state.db"), config.max_history)?;
+        let github = GitHub::load(config.data_dir.join("github.json"))?;
         let docker = DockerClient::new(config.docker_binary.clone());
+        let git = GitClient::new(config.git_binary.clone());
+        let capabilities = Capabilities {
+            curl: net::curl_available(),
+            openssl: net::openssl_available(),
+            git: git.available(),
+        };
+
         Ok(Self {
             config,
             store,
             docker,
+            git,
+            github,
+            capabilities,
             deploy_lock: Mutex::new(()),
             started_at: now_unix(),
         })
@@ -149,6 +194,11 @@ impl App {
             _ => {}
         }
 
+        // Los retornos del navegador desde GitHub no pueden llevar cabecera
+        // Authorization: se validan con un nonce de un solo uso.
+        if request.path.starts_with("/github/") {
+            return self.route_github_return(method, request);
+        }
         if request.path.starts_with("/hooks/") {
             return self.route_webhook(method, request);
         }
@@ -165,15 +215,11 @@ impl App {
     }
 
     fn route_api(&self, method: &str, request: &Request) -> Response {
-        let segments: Vec<&str> = request
-            .path
-            .trim_matches('/')
-            .split('/')
-            .filter(|segment| !segment.is_empty())
-            .collect();
+        let segments = path_segments(&request.path);
 
         match (method, segments.as_slice()) {
             ("GET", ["api", "info"]) => self.info(),
+            ("GET", ["api", "catalog"]) => self.catalog(),
             ("GET", ["api", "system"]) => self.system_metrics(),
             ("GET", ["api", "processes"]) => self.list_processes(),
             ("GET", ["api", "containers"]) => self.list_containers(),
@@ -185,57 +231,65 @@ impl App {
             }
             ("GET", ["api", "projects"]) => self.list_projects(),
             ("POST", ["api", "projects"]) => self.create_project(request),
-            ("DELETE", ["api", "projects", slug]) => self.delete_project(slug),
-            ("GET", ["api", "projects", slug, "logs"]) => {
-                self.project_logs(slug, request)
-            }
+            ("DELETE", ["api", "projects", slug]) => self.delete_project(slug, request),
+            ("GET", ["api", "projects", slug, "logs"]) => self.project_logs(slug, request),
             ("POST", ["api", "projects", slug, "deploy"]) => {
                 self.deploy_project(slug, request, "manual")
             }
-            ("POST", ["api", "projects", slug, "rollback"]) => {
-                self.rollback_project(slug)
-            }
+            ("POST", ["api", "projects", slug, "rollback"]) => self.rollback_project(slug),
             ("GET", ["api", "history"]) => self.history(request),
+
+            ("GET", ["api", "registry", "search"]) => self.registry_search(request),
+            ("GET", ["api", "registry", "tags"]) => self.registry_tags(request),
+
+            ("GET", ["api", "github"]) => self.github_status(request),
+            ("DELETE", ["api", "github"]) => self.github_disconnect(),
+            ("POST", ["api", "github", "manifest"]) => self.github_manifest(request),
+            ("POST", ["api", "github", "manual"]) => self.github_manual(request),
+            ("POST", ["api", "github", "install"]) => self.github_install_url(),
+            ("GET", ["api", "github", "installations"]) => self.github_installations(),
+            ("GET", ["api", "github", "repositories"]) => self.github_repositories(request),
+            ("GET", ["api", "github", "branches"]) => self.github_branches(request),
+
+            ("POST", ["api", "resources", "database"]) => self.create_database(request, None),
+            ("POST", ["api", "resources", "image"]) => self.create_image_service(request),
+            ("POST", ["api", "resources", "repository"]) => self.create_repository_service(request),
+            // Ruta histórica: equivale a crear una base de datos PostgreSQL.
             ("POST", ["api", "templates", "postgres"]) => {
-                self.create_postgres_template(request)
+                self.create_database(request, Some("postgres"))
             }
             _ => json_error(404, "endpoint no encontrado"),
         }
     }
 
-    fn route_webhook(&self, method: &str, request: &Request) -> Response {
-        let segments: Vec<&str> = request
-            .path
-            .trim_matches('/')
-            .split('/')
-            .filter(|segment| !segment.is_empty())
-            .collect();
-        let ["hooks", "deploy", slug] = segments.as_slice() else {
-            return json_error(404, "webhook no encontrado");
-        };
-        if method != "POST" {
-            return json_error(405, "el webhook requiere POST");
-        }
-
-        let project = match self.store.project(slug) {
-            Ok(Some(project)) => project,
-            Ok(None) => return json_error(404, "webhook no encontrado"),
-            Err(error) => return json_error(500, &error),
-        };
-        let supplied_token = request
-            .header("x-tinkiva-token")
-            .or_else(|| bearer_token(request));
-        if !supplied_token.is_some_and(|token| constant_time_eq(token, &project.webhook_token)) {
-            return json_error(404, "webhook no encontrado");
-        }
-
-        self.deploy_project_with_project(project, request, "webhook")
-    }
+    // ── Autenticación ──────────────────────────────────────────────────────
 
     fn is_authorized(&self, request: &Request) -> bool {
         bearer_token(request)
             .is_some_and(|token| constant_time_eq(token, &self.config.admin_token))
     }
+
+    /// URL absoluta con la que GitHub puede volver al panel.
+    fn public_url(&self, request: &Request) -> String {
+        if let Some(url) = &self.config.public_url {
+            return url.clone();
+        }
+        let host = request
+            .header("host")
+            .filter(|host| valid_host(host))
+            .unwrap_or("127.0.0.1:8787");
+        let scheme = if request
+            .header("x-forwarded-proto")
+            .is_some_and(|value| value.eq_ignore_ascii_case("https"))
+        {
+            "https"
+        } else {
+            "http"
+        };
+        format!("{scheme}://{host}")
+    }
+
+    // ── Información general ────────────────────────────────────────────────
 
     fn info(&self) -> Response {
         let (projects, deployments) = match self.store.counts() {
@@ -256,6 +310,8 @@ impl App {
                     "\"workers\":{},",
                     "\"projects\":{},",
                     "\"deployments\":{},",
+                    "\"capabilities\":{},",
+                    "\"github_connected\":{},",
                     "\"docker\":{}",
                     "}}"
                 ),
@@ -266,7 +322,23 @@ impl App {
                 self.config.workers,
                 projects,
                 deployments,
+                self.capabilities.to_json(),
+                self.github.is_connected(),
                 docker.to_json(),
+            ),
+        )
+    }
+
+    /// Catálogo estático que alimenta el diálogo «Añadir recurso».
+    fn catalog(&self) -> Response {
+        Response::json(
+            200,
+            format!(
+                "{{\"engines\":{},\"popular_images\":{},\"capabilities\":{},\"allowed_root\":{}}}",
+                templates::engines_json(),
+                registry::popular_json(),
+                self.capabilities.to_json(),
+                json_string(&self.config.allowed_root.to_string_lossy()),
             ),
         )
     }
@@ -284,6 +356,8 @@ impl App {
             Err(error) => json_error(500, &error),
         }
     }
+
+    // ── Contenedores ───────────────────────────────────────────────────────
 
     fn list_containers(&self) -> Response {
         match self.docker.containers() {
@@ -330,6 +404,8 @@ impl App {
             Err(error) => json_error(400, &error),
         }
     }
+
+    // ── Proyectos ──────────────────────────────────────────────────────────
 
     fn list_projects(&self) -> Response {
         match self.store.projects() {
@@ -410,15 +486,17 @@ impl App {
             _ => None,
         };
         let project = Project {
-            slug: slug.to_owned(),
-            name: name.trim().to_owned(),
-            compose_file,
             env_file,
             image_env,
             branch,
-            webhook_token,
             current_image,
-            created_at: now_unix(),
+            ..Project::compose(
+                slug.to_owned(),
+                name.trim().to_owned(),
+                compose_file,
+                webhook_token,
+                now_unix(),
+            )
         };
 
         match self.store.add_project(project.clone()) {
@@ -427,15 +505,57 @@ impl App {
         }
     }
 
-    fn delete_project(&self, slug: &str) -> Response {
+    fn delete_project(&self, slug: &str, request: &Request) -> Response {
         if !valid_slug(slug) {
             return json_error(400, "slug inválido");
         }
+        let project = match self.store.project(slug) {
+            Ok(Some(project)) => project,
+            Ok(None) => return json_error(404, "proyecto no encontrado"),
+            Err(error) => return json_error(500, &error),
+        };
+
+        // `remove` decide cuánto se destruye: por omisión solo se desregistra.
+        let remove = request.query.get("remove").map_or("none", String::as_str);
+        let mut notes = Vec::new();
+
+        if matches!(remove, "stack" | "all") {
+            match self.docker.compose_down(&project, remove == "all") {
+                Ok(result) if result.success => notes.push("contenedores detenidos"),
+                Ok(_) => notes.push("no se pudieron detener todos los contenedores"),
+                Err(_) => notes.push("no se pudo hablar con Docker"),
+            }
+        }
+
+        if remove == "all" {
+            // Solo se borra el directorio que el propio panel generó para el recurso.
+            let expected = self.config.allowed_root.join(slug);
+            let owned = project
+                .directory()
+                .and_then(|directory| directory.canonicalize().ok())
+                .is_some_and(|directory| directory == expected);
+            if owned && expected.exists() {
+                match fs::remove_dir_all(&expected) {
+                    Ok(()) => notes.push("archivos eliminados"),
+                    Err(_) => notes.push("no se pudieron eliminar los archivos"),
+                }
+            } else {
+                notes.push("los archivos quedaron intactos por estar fuera del recurso");
+            }
+        }
+
         match self.store.remove_project(slug) {
-            Ok(true) => Response::json(
-                200,
-                "{\"ok\":true,\"message\":\"Proyecto desregistrado; no se eliminaron archivos ni contenedores.\"}".to_owned(),
-            ),
+            Ok(true) => {
+                let detail = if notes.is_empty() {
+                    "Proyecto desregistrado; no se eliminaron archivos ni contenedores.".to_owned()
+                } else {
+                    format!("Proyecto desregistrado ({}).", notes.join(", "))
+                };
+                Response::json(
+                    200,
+                    format!("{{\"ok\":true,\"message\":{}}}", json_string(&detail)),
+                )
+            }
             Ok(false) => json_error(404, "proyecto no encontrado"),
             Err(error) => json_error(500, &error),
         }
@@ -457,6 +577,8 @@ impl App {
             Err(error) => json_error(502, &error),
         }
     }
+
+    // ── Despliegues ────────────────────────────────────────────────────────
 
     fn deploy_project(&self, slug: &str, request: &Request, trigger: &str) -> Response {
         let project = match self.store.project(slug) {
@@ -526,6 +648,45 @@ impl App {
         }
     }
 
+    /// Deja el clon de git en la punta de la rama antes de reconstruir la imagen.
+    fn sync_repository(&self, project: &Project) -> Result<Option<String>, ApiError> {
+        let (Some(repository), Some(installation_id)) =
+            (project.repository.as_deref(), project.installation_id)
+        else {
+            return Ok(None);
+        };
+        let directory = project
+            .directory()
+            .ok_or_else(|| ApiError::new(500, "el proyecto no tiene directorio"))?
+            .join("repo");
+        if !directory.is_dir() {
+            return Err(ApiError::new(
+                422,
+                format!("falta el clon de {repository}; vuelve a crear el recurso"),
+            ));
+        }
+
+        let branch = project.branch.as_deref().unwrap_or("main");
+        let token = self
+            .github
+            .installation_token(installation_id)
+            .map_err(|error| ApiError::new(502, error))?;
+        let result = self
+            .git
+            .update_repository(&directory, branch, &token)
+            .map_err(|error| ApiError::new(502, error))?;
+        if !result.success {
+            return Err(ApiError::new(
+                502,
+                format!(
+                    "no se pudo actualizar {repository}: {}",
+                    result.redacted_summary(&[&token])
+                ),
+            ));
+        }
+        Ok(self.git.head_commit(&directory))
+    }
+
     fn perform_deploy(
         &self,
         project: Project,
@@ -534,14 +695,25 @@ impl App {
         commit: Option<String>,
         trigger: &str,
     ) -> Result<DeployOutcome, ApiError> {
-        if let Some(expected_branch) = &project.branch {
-            if branch.as_deref() != Some(expected_branch.as_str()) {
+        // Un proyecto atado a una rama solo se despliega desde ella. Si no se
+        // indica ninguna se usa la configurada, salvo en webhooks, donde exigimos
+        // que el emisor la declare explícitamente.
+        let branch = match (branch, project.branch.as_deref()) {
+            (Some(supplied), Some(expected)) if supplied != expected => {
                 return Err(ApiError::new(
                     403,
-                    format!("este proyecto solo acepta la rama {expected_branch}"),
+                    format!("este proyecto solo acepta la rama {expected}"),
                 ));
             }
-        }
+            (None, Some(expected)) if trigger == "webhook" => {
+                return Err(ApiError::new(
+                    403,
+                    format!("el webhook debe indicar la rama {expected}"),
+                ));
+            }
+            (None, Some(expected)) => Some(expected.to_owned()),
+            (supplied, _) => supplied,
+        };
 
         let _deployment_guard = match self.deploy_lock.try_lock() {
             Ok(guard) => guard,
@@ -559,6 +731,13 @@ impl App {
         let started = Instant::now();
         let mut previous_image = project.current_image.clone();
         let mut env_target: Option<(PathBuf, String)> = None;
+
+        let synced_commit = if project.kind == KIND_REPOSITORY {
+            self.sync_repository(&project)?
+        } else {
+            None
+        };
+        let commit = commit.or(synced_commit);
 
         if let Some(new_image) = &image {
             let (Some(env_file), Some(image_env)) = (&project.env_file, &project.image_env) else {
@@ -669,24 +848,348 @@ impl App {
         }
     }
 
-    fn create_postgres_template(&self, request: &Request) -> Response {
+    // ── Docker Hub ─────────────────────────────────────────────────────────
+
+    fn registry_search(&self, request: &Request) -> Response {
+        if !self.capabilities.curl {
+            return json_error(503, "curl no está instalado; no se puede consultar Docker Hub");
+        }
+        let query = request.query.get("q").map_or("", String::as_str);
+        match registry::search(query) {
+            Ok(body) => Response::json(200, body),
+            Err(error) => json_error(502, &error),
+        }
+    }
+
+    fn registry_tags(&self, request: &Request) -> Response {
+        if !self.capabilities.curl {
+            return json_error(503, "curl no está instalado; no se puede consultar Docker Hub");
+        }
+        let image = request.query.get("image").map_or("", String::as_str);
+        match registry::tags(image) {
+            Ok(body) => Response::json(200, body),
+            Err(error) => json_error(502, &error),
+        }
+    }
+
+    // ── GitHub App ─────────────────────────────────────────────────────────
+
+    fn github_status(&self, request: &Request) -> Response {
+        match self.github.status_json(&self.public_url(request)) {
+            Ok(body) => Response::json(200, body),
+            Err(error) => json_error(500, &error),
+        }
+    }
+
+    fn github_disconnect(&self) -> Response {
+        match self.github.disconnect() {
+            Ok(()) => Response::json(
+                200,
+                "{\"ok\":true,\"message\":\"GitHub App desconectada del panel. Recuerda borrarla también en GitHub.\"}"
+                    .to_owned(),
+            ),
+            Err(error) => json_error(500, &error),
+        }
+    }
+
+    /// Devuelve el manifiesto y el destino al que el navegador debe hacer POST.
+    fn github_manifest(&self, request: &Request) -> Response {
+        if !self.capabilities.curl || !self.capabilities.openssl {
+            return json_error(
+                503,
+                "GitHub necesita curl y openssl instalados en el servidor",
+            );
+        }
+        let public_url = self.public_url(request);
+        let suffix = match random_hex(3) {
+            Ok(suffix) => suffix,
+            Err(error) => return json_error(500, &format!("no se pudo generar sufijo: {error}")),
+        };
+        let state = match self.github.issue_nonce() {
+            Ok(state) => state,
+            Err(error) => return json_error(500, &error),
+        };
+
+        Response::json(
+            200,
+            format!(
+                "{{\"action\":{},\"manifest\":{},\"state\":{}}}",
+                json_string(&format!("https://github.com/settings/apps/new?state={state}")),
+                json_string(&self.github.manifest(&public_url, &suffix)),
+                json_string(&state),
+            ),
+        )
+    }
+
+    fn github_manual(&self, request: &Request) -> Response {
         let fields = match request.form() {
             Ok(fields) => fields,
             Err(error) => return json_error(400, &error),
         };
+        let app_id = match field(&fields, "app_id").parse::<u64>() {
+            Ok(app_id) => app_id,
+            Err(_) => return json_error(422, "App ID inválido"),
+        };
+        let slug = field(&fields, "slug");
+        let private_key = field(&fields, "private_key");
+        let webhook_secret = optional_field(&fields, "webhook_secret").unwrap_or_default();
+
+        match self
+            .github
+            .connect_manually(app_id, slug, private_key, webhook_secret)
+        {
+            Ok(()) => Response::json(201, "{\"ok\":true}".to_owned()),
+            Err(error) => json_error(422, &error),
+        }
+    }
+
+    /// URL de instalación con un nonce fresco para el retorno.
+    fn github_install_url(&self) -> Response {
+        let status = match self.github.status_json("") {
+            Ok(status) => status,
+            Err(error) => return json_error(500, &error),
+        };
+        let Some(install_url) = Json::parse(&status)
+            .ok()
+            .and_then(|value| value.string("install_url").map(str::to_owned))
+        else {
+            return json_error(409, "todavía no has conectado una GitHub App");
+        };
+        let state = match self.github.issue_nonce() {
+            Ok(state) => state,
+            Err(error) => return json_error(500, &error),
+        };
+        Response::json(
+            200,
+            format!(
+                "{{\"url\":{}}}",
+                json_string(&format!("{install_url}?state={state}"))
+            ),
+        )
+    }
+
+    fn github_installations(&self) -> Response {
+        match self.github.installations_json() {
+            Ok(body) => Response::json(200, body),
+            Err(error) => json_error(502, &error),
+        }
+    }
+
+    fn github_repositories(&self, request: &Request) -> Response {
+        let Some(installation_id) = query_u64(request, "installation_id") else {
+            return json_error(422, "installation_id inválido");
+        };
+        match self.github.repositories_json(installation_id) {
+            Ok(body) => Response::json(200, body),
+            Err(error) => json_error(502, &error),
+        }
+    }
+
+    fn github_branches(&self, request: &Request) -> Response {
+        let Some(installation_id) = query_u64(request, "installation_id") else {
+            return json_error(422, "installation_id inválido");
+        };
+        let repository = request.query.get("repository").map_or("", String::as_str);
+        match self.github.branches_json(installation_id, repository) {
+            Ok(body) => Response::json(200, body),
+            Err(error) => json_error(502, &error),
+        }
+    }
+
+    /// Retornos del navegador desde GitHub. No llevan token: se validan por nonce.
+    fn route_github_return(&self, method: &str, request: &Request) -> Response {
+        if method != "GET" {
+            return json_error(405, "método no permitido");
+        }
+        let segments = path_segments(&request.path);
+        let state = request.query.get("state").map_or("", String::as_str);
+
+        match segments.as_slice() {
+            ["github", "callback"] => {
+                if !self.github.consume_nonce(state) {
+                    return Response::redirect("/?github=estado_invalido#/github");
+                }
+                let code = request.query.get("code").map_or("", String::as_str);
+                match self.github.complete_manifest(code) {
+                    Ok(()) => Response::redirect("/?github=conectado#/github"),
+                    Err(_) => Response::redirect("/?github=error#/github"),
+                }
+            }
+            ["github", "installed"] => {
+                // Sin efectos secundarios: las instalaciones se leen en vivo con el JWT.
+                let _ = self.github.consume_nonce(state);
+                Response::redirect("/?github=instalado#/github")
+            }
+            _ => json_error(404, "ruta no encontrada"),
+        }
+    }
+
+    // ── Webhooks ───────────────────────────────────────────────────────────
+
+    fn route_webhook(&self, method: &str, request: &Request) -> Response {
+        let segments = path_segments(&request.path);
+
+        match segments.as_slice() {
+            ["hooks", "github"] => {
+                if method != "POST" {
+                    return json_error(405, "el webhook requiere POST");
+                }
+                self.github_webhook(request)
+            }
+            ["hooks", "deploy", slug] => {
+                if method != "POST" {
+                    return json_error(405, "el webhook requiere POST");
+                }
+                let project = match self.store.project(slug) {
+                    Ok(Some(project)) => project,
+                    Ok(None) => return json_error(404, "webhook no encontrado"),
+                    Err(error) => return json_error(500, &error),
+                };
+                let supplied_token = request
+                    .header("x-tinkiva-token")
+                    .or_else(|| bearer_token(request));
+                if !supplied_token
+                    .is_some_and(|token| constant_time_eq(token, &project.webhook_token))
+                {
+                    return json_error(404, "webhook no encontrado");
+                }
+                self.deploy_project_with_project(project, request, "webhook")
+            }
+            _ => json_error(404, "webhook no encontrado"),
+        }
+    }
+
+    fn github_webhook(&self, request: &Request) -> Response {
+        if !self
+            .github
+            .verify_webhook(request.header("x-hub-signature-256"), &request.body)
+        {
+            return json_error(401, "firma de webhook inválida");
+        }
+
+        let event = request.header("x-github-event").unwrap_or_default();
+        if event == "ping" {
+            return Response::json(200, "{\"ok\":true,\"message\":\"pong\"}".to_owned());
+        }
+        if event != "push" {
+            return Response::json(
+                202,
+                format!("{{\"ok\":true,\"ignored\":{}}}", json_string(event)),
+            );
+        }
+
+        let Some(payload) = webhook_payload(request) else {
+            return json_error(400, "no se pudo leer el payload del webhook");
+        };
+        let document = match Json::parse(&payload) {
+            Ok(document) => document,
+            Err(error) => return json_error(400, &format!("payload inválido: {error}")),
+        };
+
+        let Some(repository) = document
+            .get("repository")
+            .and_then(|repository| repository.string("full_name"))
+        else {
+            return json_error(400, "el payload no indica el repositorio");
+        };
+        let Some(branch) = document
+            .string("ref")
+            .and_then(|reference| reference.strip_prefix("refs/heads/"))
+        else {
+            return Response::json(
+                202,
+                "{\"ok\":true,\"ignored\":\"no es un push a una rama\"}".to_owned(),
+            );
+        };
+        let commit = document
+            .string("after")
+            .filter(|commit| valid_commit(commit))
+            .map(|commit| commit[..12.min(commit.len())].to_owned());
+
+        let projects = match self.store.projects() {
+            Ok(projects) => projects,
+            Err(error) => return json_error(500, &error),
+        };
+        let targets: Vec<Project> = projects
+            .into_iter()
+            .filter(|project| {
+                project.repository.as_deref() == Some(repository)
+                    && project.branch.as_deref().unwrap_or("main") == branch
+            })
+            .collect();
+
+        if targets.is_empty() {
+            return Response::json(
+                202,
+                "{\"ok\":true,\"ignored\":\"ningún proyecto escucha ese repositorio y rama\"}"
+                    .to_owned(),
+            );
+        }
+
+        let mut results = Vec::new();
+        for project in targets {
+            let slug = project.slug.clone();
+            let outcome = self.perform_deploy(
+                project,
+                None,
+                Some(branch.to_owned()),
+                commit.clone(),
+                "webhook",
+            );
+            results.push(match outcome {
+                Ok(outcome) => format!(
+                    "{{\"project\":{},\"ok\":{},\"deployment\":{}}}",
+                    json_string(&slug),
+                    outcome.success,
+                    outcome.deployment.to_json()
+                ),
+                Err(error) => format!(
+                    "{{\"project\":{},\"ok\":false,\"error\":{}}}",
+                    json_string(&slug),
+                    json_string(&error.message)
+                ),
+            });
+        }
+
+        Response::json(200, format!("{{\"results\":[{}]}}", results.join(",")))
+    }
+
+    // ── Alta de recursos ───────────────────────────────────────────────────
+
+    fn create_database(&self, request: &Request, forced_engine: Option<&str>) -> Response {
+        let fields = match request.form() {
+            Ok(fields) => fields,
+            Err(error) => return json_error(400, &error),
+        };
+        let engine_id = forced_engine.unwrap_or_else(|| field(&fields, "engine"));
+        let Some(engine) = templates::engine(engine_id) else {
+            return json_error(422, "motor de base de datos no soportado");
+        };
+
         let slug = field(&fields, "slug");
         let name = field(&fields, "name");
-        let database = field(&fields, "database");
-        let username = field(&fields, "username");
-
         if !valid_slug(slug) {
             return json_error(422, "slug inválido");
         }
         if !valid_display_name(name) {
             return json_error(422, "nombre inválido");
         }
-        if !valid_db_identifier(database) || !valid_db_identifier(username) {
-            return json_error(422, "database o username inválido");
+
+        let database = match optional_field(&fields, "database") {
+            Some(value) => value,
+            None if engine.needs_database => "app",
+            None => "",
+        };
+        let username = match optional_field(&fields, "username") {
+            Some(value) => value,
+            None if engine.needs_username => "app",
+            None => "",
+        };
+        if engine.needs_database && !valid_db_identifier(database) {
+            return json_error(422, "nombre de base de datos inválido");
+        }
+        if engine.needs_username && !valid_db_identifier(username) {
+            return json_error(422, "nombre de usuario inválido");
         }
 
         let password = match optional_field(&fields, "password") {
@@ -702,107 +1205,373 @@ impl App {
                 Err(error) => return json_error(500, &format!("no se pudo crear contraseña: {error}")),
             },
         };
-        let published_port = match optional_field(&fields, "published_port") {
-            Some(value) => match value.parse::<u16>() {
-                Ok(port) if port > 0 => Some(port),
-                _ => return json_error(422, "published_port inválido"),
-            },
-            None => None,
+        let root_password = match random_hex(24) {
+            Ok(password) => password,
+            Err(error) => return json_error(500, &format!("no se pudo crear contraseña: {error}")),
+        };
+
+        let published_port = match parse_port(&fields, "published_port") {
+            Ok(port) => port,
+            Err(error) => return json_error(422, &error),
         };
         let memory_mb = optional_field(&fields, "memory_mb")
             .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(512)
-            .clamp(128, 8192);
+            .unwrap_or(engine.default_memory_mb)
+            .clamp(64, 16_384);
 
+        let generated = templates::database(&templates::DatabaseRequest {
+            engine,
+            slug,
+            database,
+            username,
+            password: &password,
+            root_password: &root_password,
+            published_port,
+            memory_mb,
+        });
+
+        let directory = match self.prepare_directory(slug) {
+            Ok(directory) => directory,
+            Err(error) => return json_error(error.status, &error.message),
+        };
+
+        self.finish_resource(
+            &directory,
+            NewResource {
+                slug: slug.to_owned(),
+                name: name.trim().to_owned(),
+                kind: KIND_DATABASE,
+                engine: Some(engine.id.to_owned()),
+                repository: None,
+                installation_id: None,
+                branch: None,
+                image_env: None,
+                current_image: Some(generated.image.clone()),
+                generated,
+            },
+            Some(&password),
+            published_port,
+        )
+    }
+
+    fn create_image_service(&self, request: &Request) -> Response {
+        let fields = match request.form() {
+            Ok(fields) => fields,
+            Err(error) => return json_error(400, &error),
+        };
+        let slug = field(&fields, "slug");
+        let name = field(&fields, "name");
+        let image = field(&fields, "image");
+
+        if !valid_slug(slug) {
+            return json_error(422, "slug inválido");
+        }
+        if !valid_display_name(name) {
+            return json_error(422, "nombre inválido");
+        }
+        if !valid_image_ref(image) {
+            return json_error(422, "referencia de imagen inválida");
+        }
+
+        let container_port = match parse_port(&fields, "container_port") {
+            Ok(port) => port,
+            Err(error) => return json_error(422, &error),
+        };
+        let published_port = match parse_port(&fields, "published_port") {
+            Ok(port) => port,
+            Err(error) => return json_error(422, &error),
+        };
+        if published_port.is_some() && container_port.is_none() {
+            return json_error(422, "indica también el puerto interno del contenedor");
+        }
+        let memory_mb = optional_field(&fields, "memory_mb")
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(512)
+            .clamp(64, 16_384);
+        let volume_path = optional_field(&fields, "volume_path");
+        if volume_path.is_some_and(|path| !valid_absolute_path(path)) {
+            return json_error(422, "ruta de volumen inválida");
+        }
+        let environment = match parse_environment(field(&fields, "environment")) {
+            Ok(environment) => environment,
+            Err(error) => return json_error(422, &error),
+        };
+
+        let generated = templates::service(&templates::ServiceRequest {
+            slug,
+            image,
+            container_port,
+            published_port,
+            memory_mb,
+            volume_path,
+            environment: &environment,
+        });
+
+        let directory = match self.prepare_directory(slug) {
+            Ok(directory) => directory,
+            Err(error) => return json_error(error.status, &error.message),
+        };
+
+        self.finish_resource(
+            &directory,
+            NewResource {
+                slug: slug.to_owned(),
+                name: name.trim().to_owned(),
+                kind: KIND_IMAGE,
+                engine: optional_field(&fields, "icon").map(str::to_owned),
+                repository: None,
+                installation_id: None,
+                branch: None,
+                // Con la imagen en `.env` el rollback funciona igual que en Compose.
+                image_env: Some("APP_IMAGE".to_owned()),
+                current_image: Some(image.to_owned()),
+                generated,
+            },
+            None,
+            published_port,
+        )
+    }
+
+    fn create_repository_service(&self, request: &Request) -> Response {
+        if !self.capabilities.git {
+            return json_error(503, "git no está instalado en el servidor");
+        }
+        let fields = match request.form() {
+            Ok(fields) => fields,
+            Err(error) => return json_error(400, &error),
+        };
+        let slug = field(&fields, "slug");
+        let name = field(&fields, "name");
+        let repository = field(&fields, "repository");
+        let branch = field(&fields, "branch");
+
+        if !valid_slug(slug) {
+            return json_error(422, "slug inválido");
+        }
+        if !valid_display_name(name) {
+            return json_error(422, "nombre inválido");
+        }
+        if !crate::github::valid_repository(repository) {
+            return json_error(422, "repositorio inválido");
+        }
+        if !valid_branch(branch) {
+            return json_error(422, "rama inválida");
+        }
+        let Some(installation_id) = field(&fields, "installation_id").parse::<u64>().ok() else {
+            return json_error(422, "installation_id inválido");
+        };
+
+        let dockerfile = optional_field(&fields, "dockerfile").unwrap_or("Dockerfile");
+        let build_context = optional_field(&fields, "build_context").unwrap_or(".");
+        if !valid_relative_path(dockerfile) || !valid_relative_path(build_context) {
+            return json_error(422, "ruta de Dockerfile o contexto inválida");
+        }
+
+        let container_port = match parse_port(&fields, "container_port") {
+            Ok(port) => port,
+            Err(error) => return json_error(422, &error),
+        };
+        let published_port = match parse_port(&fields, "published_port") {
+            Ok(port) => port,
+            Err(error) => return json_error(422, &error),
+        };
+        if published_port.is_some() && container_port.is_none() {
+            return json_error(422, "indica también el puerto interno del contenedor");
+        }
+        let memory_mb = optional_field(&fields, "memory_mb")
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(512)
+            .clamp(64, 16_384);
+        let environment = match parse_environment(field(&fields, "environment")) {
+            Ok(environment) => environment,
+            Err(error) => return json_error(422, &error),
+        };
+
+        let token = match self.github.installation_token(installation_id) {
+            Ok(token) => token,
+            Err(error) => return json_error(502, &error),
+        };
+
+        let directory = match self.prepare_directory(slug) {
+            Ok(directory) => directory,
+            Err(error) => return json_error(error.status, &error.message),
+        };
+
+        let clone = self
+            .git
+            .clone_repository(repository, branch, &token, &directory.join("repo"));
+        match clone {
+            Ok(result) if result.success => {}
+            Ok(result) => {
+                let _ = fs::remove_dir_all(&directory);
+                return json_error(
+                    502,
+                    &format!(
+                        "no se pudo clonar {repository}: {}",
+                        result.redacted_summary(&[&token])
+                    ),
+                );
+            }
+            Err(error) => {
+                let _ = fs::remove_dir_all(&directory);
+                return json_error(502, &error);
+            }
+        }
+
+        let dockerfile_path = directory
+            .join("repo")
+            .join(build_context.trim_matches('/'))
+            .join(dockerfile);
+        if !dockerfile_path.is_file() {
+            let _ = fs::remove_dir_all(&directory);
+            return json_error(
+                422,
+                &format!("el repositorio no contiene {build_context}/{dockerfile}"),
+            );
+        }
+
+        let generated = templates::repository(&templates::RepositoryRequest {
+            slug,
+            repository,
+            branch,
+            dockerfile,
+            build_context,
+            container_port,
+            published_port,
+            memory_mb,
+            environment: &environment,
+        });
+
+        self.finish_resource(
+            &directory,
+            NewResource {
+                slug: slug.to_owned(),
+                name: name.trim().to_owned(),
+                kind: KIND_REPOSITORY,
+                engine: None,
+                repository: Some(repository.to_owned()),
+                installation_id: Some(installation_id),
+                branch: Some(branch.to_owned()),
+                image_env: None,
+                current_image: Some(generated.image.clone()),
+                generated,
+            },
+            None,
+            published_port,
+        )
+    }
+
+    /// Crea `<allowed_root>/<slug>` con permisos restringidos.
+    fn prepare_directory(&self, slug: &str) -> Result<PathBuf, ApiError> {
         let directory = self.config.allowed_root.join(slug);
         if directory.exists() {
-            return json_error(409, "el directorio del template ya existe");
+            return Err(ApiError::new(
+                409,
+                format!("ya existe {}; elige otro slug", directory.display()),
+            ));
         }
-        if let Err(error) = fs::create_dir(&directory) {
-            return json_error(500, &format!("no se pudo crear el directorio: {error}"));
-        }
+        fs::create_dir(&directory)
+            .map_err(|error| ApiError::new(500, format!("no se pudo crear el directorio: {error}")))?;
         if let Err(error) = fs::set_permissions(&directory, fs::Permissions::from_mode(0o750)) {
-            let _ = fs::remove_dir(&directory);
-            return json_error(500, &format!("no se pudo proteger el directorio: {error}"));
+            let _ = fs::remove_dir_all(&directory);
+            return Err(ApiError::new(
+                500,
+                format!("no se pudo proteger el directorio: {error}"),
+            ));
         }
+        Ok(directory)
+    }
 
+    /// Escribe los archivos, registra el proyecto y hace el primer despliegue.
+    /// Cualquier fallo antes del registro deja el disco como estaba.
+    fn finish_resource(
+        &self,
+        directory: &Path,
+        resource: NewResource,
+        secret: Option<&str>,
+        published_port: Option<u16>,
+    ) -> Response {
         let compose_file = directory.join("compose.yaml");
         let env_file = directory.join(".env");
-        let compose = postgres_compose(slug, published_port);
-        let env_contents = format!(
-            "POSTGRES_DB={database}\nPOSTGRES_USER={username}\nPOSTGRES_PASSWORD={password}\nPOSTGRES_MEMORY_LIMIT={memory_mb}m\n"
-        );
-        if let Err(error) = atomic_write(&compose_file, compose.as_bytes(), 0o640) {
-            let _ = fs::remove_dir_all(&directory);
-            return json_error(500, &format!("no se pudo escribir Compose: {error}"));
+
+        let abort = |error: String, status: u16| -> Response {
+            let _ = fs::remove_dir_all(directory);
+            json_error(status, &error)
+        };
+
+        if let Err(error) = atomic_write(&compose_file, resource.generated.compose.as_bytes(), 0o640)
+        {
+            return abort(format!("no se pudo escribir Compose: {error}"), 500);
         }
-        if let Err(error) = atomic_write(&env_file, env_contents.as_bytes(), 0o600) {
-            let _ = fs::remove_dir_all(&directory);
-            return json_error(500, &format!("no se pudo escribir .env: {error}"));
+        if let Err(error) = atomic_write(&env_file, resource.generated.env.as_bytes(), 0o600) {
+            return abort(format!("no se pudo escribir .env: {error}"), 500);
         }
-        if let Err(error) = self.docker.ensure_network("tinkiva") {
-            let _ = fs::remove_dir_all(&directory);
-            return json_error(502, &format!("no se pudo crear la red tinkiva: {error}"));
+        if let Err(error) = self.docker.ensure_network(templates::SHARED_NETWORK) {
+            return abort(format!("no se pudo crear la red compartida: {error}"), 502);
         }
         if let Err(error) = self.docker.validate_compose(&compose_file) {
-            let _ = fs::remove_dir_all(&directory);
-            return json_error(422, &format!("el template Compose no es válido: {error}"));
+            return abort(format!("el Compose generado no es válido: {error}"), 422);
         }
+
+        let webhook_token = match random_hex(24) {
+            Ok(token) => token,
+            Err(error) => return abort(format!("no se pudo crear token: {error}"), 500),
+        };
 
         let project = Project {
-            slug: slug.to_owned(),
-            name: name.trim().to_owned(),
+            slug: resource.slug,
+            name: resource.name,
             compose_file,
             env_file: Some(env_file),
-            image_env: None,
-            branch: None,
-            webhook_token: match random_hex(24) {
-                Ok(token) => token,
-                Err(error) => {
-                    let _ = fs::remove_dir_all(&directory);
-                    return json_error(500, &format!("no se pudo crear token: {error}"));
-                }
-            },
-            current_image: Some("postgres:17-alpine".to_owned()),
+            image_env: resource.image_env,
+            branch: resource.branch,
+            webhook_token,
+            current_image: resource.current_image,
             created_at: now_unix(),
+            kind: resource.kind.to_owned(),
+            engine: resource.engine,
+            repository: resource.repository,
+            installation_id: resource.installation_id,
         };
         if let Err(error) = self.store.add_project(project.clone()) {
-            let _ = fs::remove_dir_all(&directory);
-            return json_error(409, &error);
+            return abort(error, 409);
         }
 
-        let outcome = match self.perform_deploy(project.clone(), None, None, None, "template") {
+        // A partir de aquí el proyecto ya está registrado: un fallo de despliegue
+        // se informa pero no destruye nada, para que el usuario pueda reintentar.
+        let outcome = match self.perform_deploy(project.clone(), None, None, None, "resource") {
             Ok(outcome) => outcome,
             Err(error) => {
-                return json_error(
+                return Response::json(
                     error.status,
-                    &format!(
-                        "PostgreSQL fue registrado, pero no se pudo desplegar: {}. Contraseña generada: {}",
-                        error.message, password
+                    format!(
+                        concat!(
+                            "{{\"project\":{},\"deployment\":null,\"password\":{},",
+                            "\"connection_uri\":{},\"host\":{},\"published_port\":{},\"error\":{}}}"
+                        ),
+                        project.to_json(true),
+                        json_optional_secret(secret),
+                        json_string(&resource.generated.connection_uri),
+                        json_string(&resource.generated.host),
+                        published_port.map_or_else(|| "null".to_owned(), |port| port.to_string()),
+                        json_string(&error.message),
                     ),
                 );
             }
         };
-        let connection_host = format!("{slug}-postgres");
-        let connection_uri = format!(
-            "postgresql://{username}:{password}@{connection_host}:5432/{database}"
-        );
+
         Response::json(
             if outcome.success { 201 } else { 502 },
             format!(
                 concat!(
-                    "{{",
-                    "\"project\":{},",
-                    "\"deployment\":{},",
-                    "\"password\":{},",
-                    "\"connection_uri\":{},",
-                    "\"published_port\":{}",
-                    "}}"
+                    "{{\"project\":{},\"deployment\":{},\"password\":{},",
+                    "\"connection_uri\":{},\"host\":{},\"published_port\":{}}}"
                 ),
                 project.to_json(true),
                 outcome.deployment.to_json(),
-                json_string(&password),
-                json_string(&connection_uri),
+                json_optional_secret(secret),
+                json_string(&resource.generated.connection_uri),
+                json_string(&resource.generated.host),
                 published_port.map_or_else(|| "null".to_owned(), |port| port.to_string()),
             ),
         )
@@ -819,6 +1588,26 @@ impl App {
     }
 }
 
+struct NewResource {
+    slug: String,
+    name: String,
+    kind: &'static str,
+    engine: Option<String>,
+    repository: Option<String>,
+    installation_id: Option<u64>,
+    branch: Option<String>,
+    image_env: Option<String>,
+    current_image: Option<String>,
+    generated: GeneratedResource,
+}
+
+fn path_segments(path: &str) -> Vec<&str> {
+    path.trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect()
+}
+
 fn bearer_token(request: &Request) -> Option<&str> {
     request
         .header("authorization")
@@ -833,6 +1622,74 @@ fn field<'a>(fields: &'a HashMap<String, String>, name: &str) -> &'a str {
 fn optional_field<'a>(fields: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
     let value = field(fields, name);
     (!value.is_empty()).then_some(value)
+}
+
+fn query_u64(request: &Request, name: &str) -> Option<u64> {
+    request
+        .query
+        .get(name)
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+}
+
+fn parse_port(fields: &HashMap<String, String>, name: &str) -> Result<Option<u16>, String> {
+    match optional_field(fields, name) {
+        Some(value) => match value.parse::<u16>() {
+            Ok(port) if port > 0 => Ok(Some(port)),
+            _ => Err(format!("{name} inválido")),
+        },
+        None => Ok(None),
+    }
+}
+
+/// Convierte un bloque `CLAVE=valor` por líneas en pares validados.
+fn parse_environment(raw: &str) -> Result<Vec<(String, String)>, String> {
+    const RESERVED: [&str; 2] = ["APP_IMAGE", "TDM_MEMORY_LIMIT"];
+    let mut pairs = Vec::new();
+
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(format!("línea de entorno sin '=': {line}"));
+        };
+        let key = key.trim();
+        let value = value.trim();
+
+        if !valid_env_key(key) {
+            return Err(format!("clave de entorno inválida: {key}"));
+        }
+        if RESERVED.contains(&key) {
+            return Err(format!("{key} lo gestiona el panel; usa otro nombre"));
+        }
+        if value.len() > 4096 || value.contains(['\r', '\n', '\0']) {
+            return Err(format!("valor inválido para {key}"));
+        }
+        if pairs.len() >= 100 {
+            return Err("demasiadas variables de entorno (máximo 100)".to_owned());
+        }
+        pairs.push((key.to_owned(), value.to_owned()));
+    }
+    Ok(pairs)
+}
+
+/// Payload del webhook de GitHub, ya venga como JSON o como formulario.
+fn webhook_payload(request: &Request) -> Option<String> {
+    let content_type = request.header("content-type").unwrap_or_default();
+    if content_type.starts_with("application/x-www-form-urlencoded") {
+        return request.form().ok()?.get("payload").cloned();
+    }
+    String::from_utf8(request.body.clone()).ok()
+}
+
+fn valid_host(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 255
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':' | b'[' | b']')
+        })
 }
 
 fn valid_branch(value: &str) -> bool {
@@ -864,6 +1721,31 @@ fn valid_database_password(value: &str) -> bool {
         })
 }
 
+/// Ruta relativa dentro del clon: sin `..`, sin raíz absoluta y sin caracteres raros.
+fn valid_relative_path(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && !value.starts_with('/')
+        && !value.split('/').any(|segment| segment == "..")
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/')
+        })
+}
+
+/// Punto de montaje dentro del contenedor.
+fn valid_absolute_path(value: &str) -> bool {
+    value.starts_with('/')
+        && value.len() <= 256
+        && !value.contains("..")
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/')
+        })
+}
+
+fn json_optional_secret(secret: Option<&str>) -> String {
+    secret.map_or_else(|| "null".to_owned(), json_string)
+}
+
 fn deployment_message(result: &CommandResult) -> String {
     if result.success {
         let details = result.summary();
@@ -875,51 +1757,6 @@ fn deployment_message(result: &CommandResult) -> String {
     } else {
         format!("Deployment fallido: {}", result.summary())
     }
-}
-
-fn postgres_compose(slug: &str, published_port: Option<u16>) -> String {
-    let ports = published_port.map_or_else(String::new, |port| {
-        format!("    ports:\n      - \"127.0.0.1:{port}:5432\"\n")
-    });
-    format!(
-        concat!(
-            "services:\n",
-            "  postgres:\n",
-            "    image: postgres:17-alpine\n",
-            "    container_name: {slug}-postgres\n",
-            "    restart: unless-stopped\n",
-            "    environment:\n",
-            "      POSTGRES_DB: ${{POSTGRES_DB}}\n",
-            "      POSTGRES_USER: ${{POSTGRES_USER}}\n",
-            "      POSTGRES_PASSWORD: ${{POSTGRES_PASSWORD}}\n",
-            "    env_file:\n",
-            "      - .env\n",
-            "{ports}",
-            "    volumes:\n",
-            "      - postgres_data:/var/lib/postgresql/data\n",
-            "    networks:\n",
-            "      - tinkiva\n",
-            "    mem_limit: ${{POSTGRES_MEMORY_LIMIT:-512m}}\n",
-            "    shm_size: 128m\n",
-            "    healthcheck:\n",
-            "      test: [\"CMD-SHELL\", \"pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB\"]\n",
-            "      interval: 10s\n",
-            "      timeout: 5s\n",
-            "      retries: 5\n",
-            "      start_period: 20s\n",
-            "    security_opt:\n",
-            "      - no-new-privileges:true\n",
-            "\n",
-            "volumes:\n",
-            "  postgres_data:\n",
-            "\n",
-            "networks:\n",
-            "  tinkiva:\n",
-            "    external: true\n"
-        ),
-        slug = slug,
-        ports = ports,
-    )
 }
 
 fn json_error(status: u16, message: &str) -> Response {
@@ -958,9 +1795,48 @@ mod tests {
     }
 
     #[test]
-    fn postgres_template_does_not_publish_without_port() {
-        let compose = postgres_compose("demo", None);
-        assert!(!compose.contains("ports:"));
-        assert!(compose.contains("demo-postgres"));
+    fn relative_paths_cannot_escape_the_clone() {
+        assert!(valid_relative_path("Dockerfile"));
+        assert!(valid_relative_path("services/api/Dockerfile"));
+        assert!(valid_relative_path("."));
+        assert!(!valid_relative_path("/etc/passwd"));
+        assert!(!valid_relative_path("../Dockerfile"));
+        assert!(!valid_relative_path("a/../../b"));
+        assert!(!valid_relative_path(""));
+    }
+
+    #[test]
+    fn volume_paths_must_be_absolute_and_plain() {
+        assert!(valid_absolute_path("/data"));
+        assert!(valid_absolute_path("/var/lib/app"));
+        assert!(!valid_absolute_path("data"));
+        assert!(!valid_absolute_path("/data/../etc"));
+        assert!(!valid_absolute_path("/data;rm -rf /"));
+    }
+
+    #[test]
+    fn environment_blocks_are_parsed_and_guarded() {
+        let parsed = parse_environment("# comentario\nLOG_LEVEL=info\n\nPORT=3000\n").unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                ("LOG_LEVEL".to_owned(), "info".to_owned()),
+                ("PORT".to_owned(), "3000".to_owned()),
+            ]
+        );
+
+        assert!(parse_environment("minusculas=1").is_err());
+        assert!(parse_environment("SIN_IGUAL").is_err());
+        assert!(parse_environment("APP_IMAGE=otra:1").is_err());
+        assert!(parse_environment("TDM_MEMORY_LIMIT=99g").is_err());
+    }
+
+    #[test]
+    fn hosts_used_for_github_callbacks_are_validated() {
+        assert!(valid_host("127.0.0.1:8787"));
+        assert!(valid_host("panel.example.com"));
+        assert!(!valid_host("panel.example.com/evil"));
+        assert!(!valid_host("panel example.com"));
+        assert!(!valid_host(""));
     }
 }

@@ -86,11 +86,68 @@ grep -qx 'APP_IMAGE=ghcr.io/example/app:one' "$TMP/apps/demo/.env"
 curl -fsS "${AUTH[@]}" "$BASE/api/history?project=demo&limit=10" | jq -e 'length == 4' >/dev/null
 curl -fsS "${AUTH[@]}" "$BASE/api/projects/demo/logs?tail=50" | grep -q 'servicio iniciado'
 
+# La ruta histórica de PostgreSQL debe seguir funcionando igual que antes.
 curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/templates/postgres" \
   --data-urlencode 'slug=demo-db' \
   --data-urlencode 'name=Demo PostgreSQL' \
   --data-urlencode 'database=demo' \
   --data-urlencode 'username=demo' \
   --data-urlencode 'memory_mb=256' | jq -e '.project.slug == "demo-db" and (.password | length == 48)' >/dev/null
+
+# El catálogo alimenta el diálogo «Añadir recurso» de la interfaz.
+curl -fsS "${AUTH[@]}" "$BASE/api/catalog" \
+  | jq -e '(.engines | length) == 5 and (.popular_images | length) > 0 and (.capabilities | has("curl"))' >/dev/null
+
+# Cada motor debe generar su Compose endurecido y su cadena de conexión.
+for ENGINE in mysql mariadb mongodb redis; do
+  RESULT=$(curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/database" \
+    --data-urlencode "engine=$ENGINE" \
+    --data-urlencode "slug=demo-$ENGINE" \
+    --data-urlencode "name=Demo $ENGINE" \
+    --data-urlencode 'database=demo' \
+    --data-urlencode 'username=demo' \
+    --data-urlencode 'memory_mb=128')
+  echo "$RESULT" | jq -e --arg slug "demo-$ENGINE" \
+    '.project.slug == $slug and .project.kind == "database" and (.connection_uri | length) > 0' >/dev/null
+  grep -q 'no-new-privileges:true' "$TMP/apps/demo-$ENGINE/compose.yaml"
+  grep -q 'TDM_MEMORY_LIMIT=128m' "$TMP/apps/demo-$ENGINE/.env"
+  # Sin puerto pedido no se publica nada al exterior.
+  ! grep -q 'ports:' "$TMP/apps/demo-$ENGINE/compose.yaml"
+done
+
+# Un servicio desde imagen queda con APP_IMAGE en .env, así el rollback funciona.
+curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/image" \
+  --data-urlencode 'slug=demo-proxy' \
+  --data-urlencode 'name=Demo proxy' \
+  --data-urlencode 'image=nginx:1.27-alpine' \
+  --data-urlencode 'container_port=80' \
+  --data-urlencode 'published_port=8099' \
+  --data-urlencode 'environment=LOG_LEVEL=info' \
+  | jq -e '.project.kind == "image" and .project.image_env == "APP_IMAGE"' >/dev/null
+grep -qx 'APP_IMAGE=nginx:1.27-alpine' "$TMP/apps/demo-proxy/.env"
+grep -qx 'LOG_LEVEL=info' "$TMP/apps/demo-proxy/.env"
+grep -q '"127.0.0.1:8099:80"' "$TMP/apps/demo-proxy/compose.yaml"
+
+# Variables reservadas y rutas de escape deben rechazarse.
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/image" \
+  --data-urlencode 'slug=demo-bad' --data-urlencode 'name=Malo' \
+  --data-urlencode 'image=nginx:1.27-alpine' \
+  --data-urlencode 'environment=APP_IMAGE=otra:1')" == '422' ]]
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/image" \
+  --data-urlencode 'slug=demo-bad' --data-urlencode 'name=Malo' \
+  --data-urlencode 'image=nginx:1.27-alpine' \
+  --data-urlencode 'volume_path=/data/../etc')" == '422' ]]
+
+# Sin GitHub App conectada el estado debe decirlo sin romperse.
+curl -fsS "${AUTH[@]}" "$BASE/api/github" | jq -e '.connected == false' >/dev/null
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/hooks/github" \
+  -H 'X-GitHub-Event: push' -H 'Content-Type: application/json' --data '{}')" == '401' ]]
+
+# El borrado completo se lleva contenedores y archivos del recurso.
+curl -fsS "${AUTH[@]}" -X DELETE "$BASE/api/projects/demo-redis?remove=all" | jq -e '.ok == true' >/dev/null
+[[ ! -d "$TMP/apps/demo-redis" ]]
+# El borrado por omisión no toca el disco.
+curl -fsS "${AUTH[@]}" -X DELETE "$BASE/api/projects/demo-mongodb" | jq -e '.ok == true' >/dev/null
+[[ -d "$TMP/apps/demo-mongodb" ]]
 
 echo "Smoke test OK; RSS del proceso: $(ps -o rss= -p "$PID" | awk '{print $1 " KiB"}')"

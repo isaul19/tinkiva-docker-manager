@@ -6,25 +6,30 @@ Panel de despliegue Docker de un solo nodo, escrito en Rust y diseñado para ser
 
 - Un único binario Rust para API, panel web y métricas.
 - Cero dependencias externas de Rust (`std` únicamente).
-- Interfaz estática embebida: HTML, CSS y JavaScript nativos; no existe un proceso Node en producción.
+- Interfaz Preact embebida en el binario; no existe un proceso Node en producción.
 - Métricas del host desde `/proc` y `df`: CPU, RAM, swap, disco, carga, uptime y RSS del propio panel.
 - Lista y métricas de contenedores mediante Docker CLI.
 - Logs de contenedores y proyectos Compose.
 - Start, stop y restart de contenedores.
-- Registro de proyectos Compose existentes.
+- Alta de recursos en un diálogo guiado, con cuatro orígenes:
+  - **Bases de datos**: PostgreSQL, MySQL, MariaDB, MongoDB y Redis, con volumen,
+    healthcheck, límite de RAM y red privada.
+  - **Imágenes de Docker Hub**: buscador con autocompletado y selector de etiquetas.
+  - **Repositorios de GitHub**: clonado, build y redespliegue automático en cada `push`.
+  - **Compose existente**: registro de un stack que ya vive en el servidor.
+- Integración con GitHub App de un clic: el panel te lleva a GitHub, GitHub crea la App
+  y vuelve con las credenciales; después eliges en qué repositorios instalarla.
 - Deploy manual o por webhook desde GitHub Actions.
 - Restricción opcional por rama.
 - Imágenes inmutables por SHA.
 - Historial persistente y rollback de imagen.
 - Restauración automática del `.env` cuando un deploy falla.
-- Plantilla PostgreSQL 17 con volumen, healthcheck, límite de RAM y red privada.
 - Autenticación Bearer para el panel y token individual por webhook.
 - Instalación como servicio systemd endurecido.
 
 ## Lo que deliberadamente no incluye
 
 - Kubernetes, Docker Swarm o múltiples servidores.
-- Compilación de aplicaciones dentro del servidor.
 - Redis, PostgreSQL o SQLite para el propio panel.
 - Prometheus, Grafana, cAdvisor o un agente adicional.
 - Gestión automática de DNS o certificados TLS.
@@ -56,11 +61,30 @@ Tinkiva Docker Manager (Rust, un proceso)
 
 El panel llama al ejecutable `docker`; no mantiene un cliente Docker, base de datos ni runtime pesado residentes. Los procesos `docker`, `docker compose` y `df` son transitorios.
 
+La misma decisión se aplica a todo lo demás que necesita salir de la máquina. En vez de
+enlazar una pila TLS, un cliente HTTP y una librería de criptografía —lo que multiplicaría
+el tamaño del binario y su consumo—, el panel invoca herramientas que ya están en cualquier
+servidor Linux:
+
+| Herramienta | Para qué | Si falta |
+| --- | --- | --- |
+| `docker` | Todo el ciclo de contenedores | El panel arranca pero avisa |
+| `curl` | Docker Hub y API de GitHub | Se desactiva el buscador de imágenes y GitHub |
+| `openssl` | Firmar los JWT de la GitHub App | Se desactiva GitHub |
+| `git` | Clonar y actualizar repositorios | Se desactivan los recursos de repositorio |
+
+Ninguna queda residente: viven milisegundos y mueren. La página **Sistema** del panel
+muestra cuáles están disponibles.
+
 ## Requisitos
 
 - Linux con systemd para el instalador incluido.
 - Docker Engine y Docker Compose v2.
+- `curl`, `openssl` y `git` para el buscador de Docker Hub y la integración con GitHub.
+  Son opcionales: sin ellos el resto del panel funciona igual.
 - Rust 1.85 o superior para compilar el panel. El repositorio y CI están fijados en Rust 1.97.1.
+- Node 20 o superior **solo si vas a modificar la interfaz**; el bundle ya viene compilado
+  en `web/dist/`, así que `cargo build` no necesita Node.
 - `curl`, `jq` y Python 3 solo para ejecutar el smoke test; no son necesarios para el servicio.
 - Para GitHub Actions: una URL HTTPS que llegue al panel.
 
@@ -311,29 +335,72 @@ El botón **Rollback** coloca la imagen anterior en el `.env` y ejecuta nuevamen
 
 Para que sea confiable, usa etiquetas inmutables por SHA. No uses `latest`.
 
-## PostgreSQL
+## Bases de datos
 
-La sección PostgreSQL crea un proyecto como:
+El diálogo **Añadir recurso → Base de datos** crea un proyecto completo:
 
 ```text
 /opt/tinkiva/apps/<slug>/compose.yaml
 /opt/tinkiva/apps/<slug>/.env
 ```
 
-Propiedades predeterminadas:
+| Motor | Imagen | Puerto interno | RAM predeterminada |
+|---|---|---|---|
+| PostgreSQL | `postgres:17-alpine` | 5432 | 512 MB |
+| MySQL | `mysql:8.4` | 3306 | 768 MB |
+| MariaDB | `mariadb:11.4` | 3306 | 640 MB |
+| MongoDB | `mongo:8` | 27017 | 768 MB |
+| Redis | `redis:7-alpine` | 6379 | 256 MB |
 
-- PostgreSQL 17 Alpine.
+Todos comparten las mismas garantías:
+
 - Volumen Docker persistente.
 - `restart: unless-stopped`.
-- Healthcheck con `pg_isready`.
+- Healthcheck propio de cada motor.
 - Red externa privada `tinkiva`.
-- Sin puerto publicado por defecto.
-- Límite predeterminado de 512 MB.
+- Sin puerto publicado salvo que lo pidas; y si lo pides, solo en `127.0.0.1`.
+- `mem_limit` configurable desde el formulario.
 - `no-new-privileges`.
 
-La URI devuelta usa el nombre del contenedor dentro de la red Docker. Cuando se publica un puerto, se enlaza únicamente a `127.0.0.1`.
+La cadena de conexión devuelta usa el nombre del contenedor dentro de la red Docker, de
+modo que otros contenedores de la red `tinkiva` llegan a la base de datos sin exponer
+ningún puerto al exterior.
 
-La contraseña generada se muestra en la respuesta de creación. Guárdala inmediatamente. El panel no incorpora un gestor de secretos.
+La contraseña generada se muestra **una sola vez**, al crear el recurso. Guárdala
+inmediatamente: queda escrita en el `.env` del recurso pero el panel no la vuelve a
+mostrar ni incorpora un gestor de secretos.
+
+## Imágenes de Docker Hub
+
+**Añadir recurso → Imagen de Docker Hub** busca en el registro mientras escribes, ofrece
+las etiquetas disponibles y genera el Compose. La imagen se guarda como `APP_IMAGE` en el
+`.env`, así que el rollback y el deploy por imagen funcionan igual que en un proyecto
+Compose registrado a mano.
+
+La búsqueda la resuelve el servidor con `curl`; el navegador nunca habla con Docker Hub,
+de modo que la CSP del panel sigue siendo `connect-src 'self'`.
+
+## GitHub
+
+**Añadir recurso → Repositorio de GitHub** necesita conectar antes una GitHub App desde la
+sección **GitHub** del panel:
+
+1. Pulsa **Conectar con GitHub**. El panel envía un manifiesto y GitHub crea la App con
+   los permisos mínimos (`contents: read`, `metadata: read`) y el evento `push`.
+2. GitHub vuelve al panel con un código que se canjea por el App ID, el secreto de webhook
+   y la clave privada. Todo queda en `<TDM_DATA_DIR>/github.json` con permisos `0600`.
+3. Pulsa **Instalar en repositorios** y elige todos o solo algunos.
+
+A partir de ahí, crear un recurso desde un repositorio clona la rama elegida en
+`<slug>/repo`, genera un Compose con `build:` y construye la imagen en el servidor. Cada
+`push` a esa rama dispara un redespliegue, validado con HMAC-SHA256 sobre el cuerpo del
+webhook.
+
+Ten en cuenta que construir imágenes consume CPU y RAM del propio servidor. En máquinas
+muy pequeñas suele salir más barato construir en GitHub Actions y desplegar por imagen.
+
+Si prefieres crear la App a mano, **Ya tengo una GitHub App** acepta App ID, slug, clave
+privada PEM y secreto de webhook.
 
 ## Configuración
 
@@ -346,6 +413,8 @@ Archivo predeterminado: `/etc/tinkiva-docker-manager/env`.
 | `TDM_DATA_DIR` | `/var/lib/tinkiva-docker-manager` | Estado local. |
 | `TDM_ALLOWED_ROOT` | `/opt/tinkiva/apps` | Única raíz aceptada para Compose y `.env`. |
 | `TDM_DOCKER_BIN` | `docker` | Ruta del Docker CLI. |
+| `TDM_GIT_BIN` | `git` | Ruta de git, usada para los recursos de repositorio. |
+| `TDM_PUBLIC_URL` | deducido de `Host` | URL pública del panel. Solo hace falta si vive tras un proxy con otro nombre, porque GitHub debe poder volver aquí. |
 | `TDM_WORKERS` | `2` | Workers HTTP fijos; rango 1–16. |
 | `TDM_MAX_HISTORY` | `200` | Registros conservados; rango 10–10,000. |
 
@@ -366,7 +435,8 @@ Authorization: Bearer <TDM_ADMIN_TOKEN>
 | Método | Ruta | Uso |
 |---|---|---|
 | `GET` | `/healthz` | Salud sin autenticación. |
-| `GET` | `/api/info` | Versión, rutas y Docker. |
+| `GET` | `/api/info` | Versión, rutas, Docker y herramientas disponibles. |
+| `GET` | `/api/catalog` | Motores de base de datos e imágenes sugeridas. |
 | `GET` | `/api/system` | Métricas del host y RSS. |
 | `GET` | `/api/processes` | Top procesos del host por CPU y RAM. |
 | `GET` | `/api/containers` | Contenedores y stats. |
@@ -376,19 +446,52 @@ Authorization: Bearer <TDM_ADMIN_TOKEN>
 | `POST` | `/api/containers/:id/restart` | Reiniciar. |
 | `GET` | `/api/projects` | Proyectos. |
 | `POST` | `/api/projects` | Registrar proyecto. |
-| `DELETE` | `/api/projects/:slug` | Desregistrar sin borrar archivos. |
+| `DELETE` | `/api/projects/:slug` | Desregistrar. `?remove=stack` detiene contenedores; `?remove=all` borra además volúmenes y archivos. |
 | `GET` | `/api/projects/:slug/logs` | Logs Compose. |
 | `POST` | `/api/projects/:slug/deploy` | Desplegar. |
 | `POST` | `/api/projects/:slug/rollback` | Rollback. |
 | `GET` | `/api/history` | Historial. |
-| `POST` | `/api/templates/postgres` | Crear PostgreSQL. |
-| `POST` | `/hooks/deploy/:slug` | Webhook con `X-Tinkiva-Token`. |
+| `POST` | `/api/resources/database` | Crear base de datos (`engine=postgres\|mysql\|mariadb\|mongodb\|redis`). |
+| `POST` | `/api/resources/image` | Crear servicio desde una imagen publicada. |
+| `POST` | `/api/resources/repository` | Crear servicio desde un repositorio de GitHub. |
+| `POST` | `/api/templates/postgres` | Alias histórico de `resources/database` con `engine=postgres`. |
+| `GET` | `/api/registry/search?q=` | Buscar imágenes en Docker Hub. |
+| `GET` | `/api/registry/tags?image=` | Etiquetas de una imagen. |
+| `GET` | `/api/github` | Estado de la GitHub App. |
+| `POST` | `/api/github/manifest` | Manifiesto para el alta de un clic. |
+| `POST` | `/api/github/manual` | Alta manual con App ID y clave privada. |
+| `POST` | `/api/github/install` | URL de instalación con estado de un solo uso. |
+| `DELETE` | `/api/github` | Desconectar la App del panel. |
+| `GET` | `/api/github/installations` | Cuentas donde está instalada. |
+| `GET` | `/api/github/repositories?installation_id=` | Repositorios accesibles. |
+| `GET` | `/api/github/branches?installation_id=&repository=` | Ramas de un repositorio. |
+| `POST` | `/hooks/deploy/:slug` | Webhook propio con `X-Tinkiva-Token`. |
+| `POST` | `/hooks/github` | Webhook de GitHub, validado con `X-Hub-Signature-256`. |
 
-Los cuerpos de escritura usan `application/x-www-form-urlencoded`. El servidor limita las cabeceras a 32 KiB y el cuerpo a 128 KiB.
+Los cuerpos de escritura usan `application/x-www-form-urlencoded`, salvo el webhook de
+GitHub, que llega como JSON. El servidor limita las cabeceras a 32 KiB y el cuerpo a
+512 KiB.
+
+Los retornos del navegador desde GitHub (`/github/callback` y `/github/installed`) no
+llevan cabecera `Authorization` porque son navegaciones, no llamadas de la interfaz; se
+validan con un nonce de un solo uso que caduca a los 15 minutos.
 
 ## Consumo de RAM
 
 El diseño busca que el proceso Rust en reposo quede holgadamente por debajo de 100 MB, pero no existe una cifra universal: depende de compilador, libc, arquitectura, workers y tráfico.
+
+Medición sobre el smoke test (Linux x86_64, glibc, 2 workers), desglosando `smaps_rollup`:
+
+| | 0.1.5 | 0.2.0 |
+|---|---|---|
+| RSS total | 2.34 MB | 2.49 MB |
+| Compartido con el sistema (libc, ld.so) | 1.68 MB | 1.75 MB |
+| Privado limpio (código y datos estáticos, desalojable) | 504 KB | 580 KB |
+| **Privado sucio (heap y pilas reales)** | **164 KB** | **164 KB** |
+
+La interfaz Preact no aumentó la memoria privada del proceso: el bundle vive en la
+sección de solo lectura del binario y se sirve prestado desde ahí, sin copiarse por
+petición. Bajo 900 descargas seguidas del bundle el RSS no se movió ni un kilobyte.
 
 Mídelo en tu servidor real:
 
@@ -459,16 +562,45 @@ rm -rf tinkiva-docker-manager   # config, pid, log, datos y apps (¡revisa antes
 ## Estructura
 
 ```text
-src/                    servidor HTTP, Docker, métricas, store y dominio
-web/                    interfaz embebida sin framework
-deploy/                 systemd y ejemplo Nginx
-examples/               Compose y GitHub Actions
-scripts/                build, instalación, smoke test y medición
+src/
+  main.rs                arranque, listener y pool de workers
+  app.rs                 enrutado HTTP y reglas de negocio
+  http.rs                parser de peticiones y respuestas
+  model.rs / store.rs    dominio y estado persistente (formato TDM2)
+  docker.rs / git.rs     integración con los CLI externos
+  proc.rs                lanzador de subprocesos con timeout
+  net.rs                 cliente HTTPS sobre curl con lista blanca
+  json.rs / crypto.rs    parser JSON y SHA-256/HMAC/Base64URL
+  github.rs              GitHub App: manifiesto, JWT, repos y webhooks
+  registry.rs            búsqueda y etiquetas de Docker Hub
+  templates.rs           generadores de Compose por tipo de recurso
+  metrics.rs             métricas del host desde /proc y df
+  setup.rs / daemon.rs   asistente, autoactualización y modo demonio
+web/
+  index.html             cascarón servido por el binario
+  src/                   interfaz Preact (vistas, componentes y estilos)
+  dist/                  bundle compilado y versionado (lo embebe cargo)
+  build.mjs              empaquetado con esbuild
+deploy/                  systemd y ejemplo Nginx
+examples/                Compose y GitHub Actions
+scripts/                 build, instalación, smoke test y medición
 tests/mock-docker.sh     Docker simulado para pruebas
 .github/workflows/ci.yml CI del propio proyecto
 VALIDATION.md            comprobaciones ejecutadas y límite del entorno generador
 ```
 
-## Estado del MVP
+### Trabajar en la interfaz
 
-Versión `0.1.0`. El alcance está intencionalmente congelado en un solo host y un solo administrador. Antes de usarlo con datos críticos, prueba deploy, rollback, reinicio del host y restauración de backups en una EC2 de staging.
+```bash
+cd web
+npm install
+npm run build     # genera web/dist/app.js y web/dist/app.css
+npm run watch     # reconstruye al guardar, sin minificar
+```
+
+El resultado se commitea a propósito: así `cargo build` y el CI no necesitan Node. Si
+tocas `web/src/`, recuerda ejecutar `npm run build` antes de commitear.
+
+## Estado del proyecto
+
+Versión `0.2.0`. El alcance sigue intencionalmente congelado en un solo host y un solo administrador. Antes de usarlo con datos críticos, prueba deploy, rollback, reinicio del host y restauración de backups en una EC2 de staging.

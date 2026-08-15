@@ -9,6 +9,30 @@ permissions:
   contents: read
 
 jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - name: Render tests
+        run: npm test
+        working-directory: web
+      - name: El bundle versionado debe coincidir con web/src
+        working-directory: web
+        run: |
+          npm run build
+          if ! git diff --quiet -- dist; then
+            echo "::error::web/dist está desincronizado. Ejecuta 'npm run build' en web/ y commitea el resultado."
+            git diff --stat -- dist
+            exit 1
+          fi
+
   test:
     runs-on: ubuntu-latest
     steps:

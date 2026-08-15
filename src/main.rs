@@ -4,13 +4,21 @@
 compile_error!("Tinkiva Docker Manager solo soporta Linux porque utiliza /proc, df y Docker.");
 
 mod app;
+mod crypto;
 mod daemon;
 mod docker;
+mod git;
+mod github;
 mod http;
+mod json;
 mod metrics;
 mod model;
+mod net;
+mod proc;
+mod registry;
 mod setup;
 mod store;
+mod templates;
 mod util;
 
 use crate::app::{App, Config};

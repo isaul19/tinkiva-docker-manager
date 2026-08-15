@@ -23,6 +23,8 @@ elif [[ "$args" == *" compose "*" config --quiet "* ]]; then
   exit 0
 elif [[ "$args" == *" compose "*" pull --quiet "* ]]; then
   printf 'imagen descargada\n'
+elif [[ "$args" == *" compose "*" down "* ]]; then
+  printf 'contenedores detenidos\n'
 elif [[ "$args" == *" compose "*" up -d "* ]]; then
   compose_file=''
   previous=''

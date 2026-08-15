@@ -1,0 +1,153 @@
+import { useMemo, useState } from 'preact/hooks';
+import { api } from '../lib/api.js';
+import { useApp } from '../lib/context.js';
+import { toSlug } from '../lib/format.js';
+import { BrandIcon } from '../ui/BrandIcon.jsx';
+import { Button } from '../ui/Primitives.jsx';
+import { Field, FormGrid, Input } from '../ui/Form.jsx';
+import { useToast } from '../ui/Toast.jsx';
+
+export function DatabaseForm({ onCreated }) {
+  const { catalog } = useApp();
+  const toast = useToast();
+  const engines = catalog?.engines || [];
+
+  const [engineId, setEngineId] = useState(engines[0]?.id || 'postgres');
+  const [name, setName] = useState('');
+  const [slugTouched, setSlugTouched] = useState(false);
+  const [form, setForm] = useState({
+    slug: '',
+    database: 'app',
+    username: 'app',
+    password: '',
+    published_port: '',
+    memory_mb: '',
+  });
+  const [busy, setBusy] = useState(false);
+
+  const engine = useMemo(
+    () => engines.find((item) => item.id === engineId) || engines[0],
+    [engines, engineId],
+  );
+
+  const update = (key) => (event) =>
+    setForm((current) => ({ ...current, [key]: event.currentTarget.value }));
+
+  const onName = (event) => {
+    const value = event.currentTarget.value;
+    setName(value);
+    if (!slugTouched) setForm((current) => ({ ...current, slug: toSlug(value) }));
+  };
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const result = await api.post('/api/resources/database', {
+        engine: engineId,
+        name,
+        slug: form.slug,
+        database: engine.needs_database ? form.database : '',
+        username: engine.needs_username ? form.username : '',
+        password: form.password,
+        published_port: form.published_port,
+        memory_mb: form.memory_mb || String(engine.default_memory_mb),
+      });
+      onCreated(result);
+    } catch (error) {
+      toast.error(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!engine) return <p class="muted">Cargando catálogo…</p>;
+
+  return (
+    <form onSubmit={submit} autocomplete="off">
+      <div class="engine-grid">
+        {engines.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            class={`engine-card${item.id === engineId ? ' selected' : ''}`}
+            style={`--engine-accent:${item.accent}`}
+            onClick={() => setEngineId(item.id)}
+          >
+            <BrandIcon slug={item.icon} size={26} />
+            <strong>{item.label}</strong>
+            <span class="muted small">{item.description}</span>
+            <code class="small">{item.image}</code>
+          </button>
+        ))}
+      </div>
+
+      <FormGrid>
+        <Field label="Nombre" hint="Como lo verás en el panel.">
+          <Input value={name} onInput={onName} required maxLength={100} placeholder={`${engine.label} de Storagia`} />
+        </Field>
+        <Field label="Slug" hint="Minúsculas, números y guiones.">
+          <Input
+            value={form.slug}
+            onInput={(event) => {
+              setSlugTouched(true);
+              update('slug')(event);
+            }}
+            required
+            pattern="[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?"
+            placeholder="storagia-db"
+          />
+        </Field>
+
+        {engine.needs_database ? (
+          <Field label="Base de datos">
+            <Input value={form.database} onInput={update('database')} required />
+          </Field>
+        ) : null}
+        {engine.needs_username ? (
+          <Field label="Usuario">
+            <Input value={form.username} onInput={update('username')} required />
+          </Field>
+        ) : null}
+
+        <Field
+          label="Contraseña"
+          wide={!engine.needs_username}
+          hint="Vacío = se genera una de 48 caracteres."
+        >
+          <Input type="password" value={form.password} onInput={update('password')} minLength={12} />
+        </Field>
+
+        <Field label="RAM máxima (MB)">
+          <Input
+            type="number"
+            min="64"
+            max="16384"
+            value={form.memory_mb}
+            onInput={update('memory_mb')}
+            placeholder={String(engine.default_memory_mb)}
+          />
+        </Field>
+        <Field
+          label="Puerto local (opcional)"
+          hint={`Se publica solo en 127.0.0.1. Interno: ${engine.port}.`}
+        >
+          <Input
+            type="number"
+            min="1"
+            max="65535"
+            value={form.published_port}
+            onInput={update('published_port')}
+            placeholder={String(engine.port)}
+          />
+        </Field>
+      </FormGrid>
+
+      <div class="form-actions">
+        <Button variant="primary" type="submit" loading={busy}>
+          Crear y desplegar
+        </Button>
+      </div>
+    </form>
+  );
+}

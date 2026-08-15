@@ -1,6 +1,13 @@
 use crate::util::{json_optional, json_string};
 use std::path::PathBuf;
 
+/// Cómo se creó el proyecto. Determina qué acciones ofrece la interfaz y cómo
+/// se despliega (`repository` necesita `git pull` antes del `compose up`).
+pub const KIND_COMPOSE: &str = "compose";
+pub const KIND_DATABASE: &str = "database";
+pub const KIND_IMAGE: &str = "image";
+pub const KIND_REPOSITORY: &str = "repository";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Project {
     pub slug: String,
@@ -12,9 +19,47 @@ pub struct Project {
     pub webhook_token: String,
     pub current_image: Option<String>,
     pub created_at: u64,
+    /// Uno de `KIND_*`.
+    pub kind: String,
+    /// Motor de base de datos (`postgres`, `redis`, …) o slug de icono del servicio.
+    pub engine: Option<String>,
+    /// Repositorio `owner/name` cuando el origen es GitHub.
+    pub repository: Option<String>,
+    /// Instalación de la GitHub App que da acceso al repositorio.
+    pub installation_id: Option<u64>,
 }
 
 impl Project {
+    /// Proyecto Compose clásico: el resto de campos quedan vacíos.
+    pub fn compose(
+        slug: String,
+        name: String,
+        compose_file: PathBuf,
+        webhook_token: String,
+        created_at: u64,
+    ) -> Self {
+        Self {
+            slug,
+            name,
+            compose_file,
+            env_file: None,
+            image_env: None,
+            branch: None,
+            webhook_token,
+            current_image: None,
+            created_at,
+            kind: KIND_COMPOSE.to_owned(),
+            engine: None,
+            repository: None,
+            installation_id: None,
+        }
+    }
+
+    /// Directorio del stack; es donde vive el clon de git en proyectos de GitHub.
+    pub fn directory(&self) -> Option<&std::path::Path> {
+        self.compose_file.parent()
+    }
+
     pub fn to_json(&self, include_secret: bool) -> String {
         let webhook_token = if include_secret {
             json_string(&self.webhook_token)
@@ -37,7 +82,11 @@ impl Project {
                 "\"branch\":{},",
                 "\"webhook_token\":{},",
                 "\"current_image\":{},",
-                "\"created_at\":{}",
+                "\"created_at\":{},",
+                "\"kind\":{},",
+                "\"engine\":{},",
+                "\"repository\":{},",
+                "\"installation_id\":{}",
                 "}}"
             ),
             json_string(&self.slug),
@@ -49,6 +98,11 @@ impl Project {
             webhook_token,
             json_optional(self.current_image.as_deref()),
             self.created_at,
+            json_string(&self.kind),
+            json_optional(self.engine.as_deref()),
+            json_optional(self.repository.as_deref()),
+            self.installation_id
+                .map_or_else(|| "null".to_owned(), |id| id.to_string()),
         )
     }
 }

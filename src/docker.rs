@@ -1,13 +1,10 @@
-use crate::model::Project;
-use crate::util::{ json_string, truncate_text, unique_suffix, valid_container_ref };
+use crate::model::{Project, KIND_REPOSITORY};
+use crate::proc::{self, CommandResult};
+use crate::util::{ json_string, truncate_text, valid_container_ref };
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::fs::{ self, OpenOptions };
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{ Path, PathBuf };
-use std::process::{ Command, Stdio };
-use std::thread;
-use std::time::{ Duration, Instant };
+use std::time::Duration;
 
 const FIELD_SEPARATOR: char = '\u{1f}';
 
@@ -99,33 +96,6 @@ impl ContainerInfo {
 
 fn optional_json(value: &Option<String>) -> String {
     value.as_deref().map_or_else(|| "null".to_owned(), json_string)
-}
-
-#[derive(Debug, Clone)]
-pub struct CommandResult {
-    pub success: bool,
-    pub code: Option<i32>,
-    pub stdout: String,
-    pub stderr: String,
-    pub timed_out: bool,
-    pub duration_ms: u128,
-}
-
-impl CommandResult {
-    pub fn summary(&self) -> String {
-        let stdout = self.stdout.trim();
-        let stderr = self.stderr.trim();
-        let message = if !stderr.is_empty() {
-            stderr
-        } else if !stdout.is_empty() {
-            stdout
-        } else if self.timed_out {
-            "el comando agotó el tiempo de espera"
-        } else {
-            "el comando no devolvió detalles"
-        };
-        truncate_text(message, 4000)
-    }
 }
 
 impl DockerClient {
@@ -316,6 +286,16 @@ impl DockerClient {
         let compose = project.compose_file.to_string_lossy().into_owned();
         let working_directory = project.compose_file.parent();
 
+        // Los proyectos de GitHub construyen la imagen a partir del clon local:
+        // no hay nada que descargar de un registro y `pull` fallaría.
+        if project.kind == KIND_REPOSITORY {
+            return self.run(
+                ["compose", "-f", &compose, "up", "-d", "--build", "--remove-orphans"],
+                working_directory,
+                Duration::from_secs(1800)
+            );
+        }
+
         let pull = self.run(
             ["compose", "-f", &compose, "pull", "--quiet"],
             working_directory,
@@ -338,6 +318,27 @@ impl DockerClient {
         }
         up.duration_ms = up.duration_ms.saturating_add(pull.duration_ms);
         Ok(up)
+    }
+
+    /// Detiene y elimina el stack. `remove_volumes` borra también los datos, por
+    /// lo que el panel solo lo pide con confirmación explícita del usuario.
+    pub fn compose_down(
+        &self,
+        project: &Project,
+        remove_volumes: bool
+    ) -> Result<CommandResult, String> {
+        let compose = project.compose_file.to_string_lossy().into_owned();
+        let mut arguments = vec![
+            "compose".to_owned(),
+            "-f".to_owned(),
+            compose,
+            "down".to_owned(),
+            "--remove-orphans".to_owned()
+        ];
+        if remove_volumes {
+            arguments.push("--volumes".to_owned());
+        }
+        self.run(arguments, project.compose_file.parent(), Duration::from_secs(180))
     }
 
     pub fn ensure_network(&self, network: &str) -> Result<(), String> {
@@ -397,88 +398,13 @@ impl DockerClient {
         -> Result<CommandResult, String>
         where I: IntoIterator<Item = S>, S: AsRef<OsStr>
     {
-        let temporary_directory = std::env::temp_dir();
-        let suffix = unique_suffix();
-        let stdout_path = temporary_directory.join(format!("tdm-{suffix}.stdout"));
-        let stderr_path = temporary_directory.join(format!("tdm-{suffix}.stderr"));
-
-        let stdout_file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(&stdout_path)
-            .map_err(|error| format!("no se pudo crear salida temporal: {error}"))?;
-        let stderr_file = match
-            OpenOptions::new().create_new(true).write(true).mode(0o600).open(&stderr_path)
-        {
-            Ok(file) => file,
-            Err(error) => {
-                let _ = fs::remove_file(&stdout_path);
-                return Err(format!("no se pudo crear error temporal: {error}"));
-            }
-        };
-
-        let mut command = Command::new(&self.binary);
-        command
-            .args(arguments)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(stdout_file))
-            .stderr(Stdio::from(stderr_file))
-            .env("DOCKER_CLI_HINTS", "false")
-            .env("COMPOSE_ANSI", "never");
-        if let Some(directory) = working_directory {
-            command.current_dir(directory);
-        }
-
-        let started = Instant::now();
-        let mut child = match command.spawn() {
-            Ok(child) => child,
-            Err(error) => {
-                let _ = fs::remove_file(&stdout_path);
-                let _ = fs::remove_file(&stderr_path);
-                return Err(format!("no se pudo ejecutar {}: {error}", self.binary.display()));
-            }
-        };
-
-        let mut timed_out = false;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    break status;
-                }
-                Ok(None) if started.elapsed() < timeout => {
-                    thread::sleep(Duration::from_millis(50));
-                }
-                Ok(None) => {
-                    timed_out = true;
-                    let _ = child.kill();
-                    break child
-                        .wait()
-                        .map_err(|error| format!("no se pudo finalizar Docker: {error}"))?;
-                }
-                Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = fs::remove_file(&stdout_path);
-                    let _ = fs::remove_file(&stderr_path);
-                    return Err(format!("no se pudo esperar el comando Docker: {error}"));
-                }
-            }
-        };
-
-        let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
-        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
-        let _ = fs::remove_file(&stdout_path);
-        let _ = fs::remove_file(&stderr_path);
-
-        Ok(CommandResult {
-            success: status.success() && !timed_out,
-            code: status.code(),
-            stdout,
-            stderr,
-            timed_out,
-            duration_ms: started.elapsed().as_millis(),
-        })
+        proc::run(
+            &self.binary,
+            arguments,
+            working_directory,
+            &[("DOCKER_CLI_HINTS", "false"), ("COMPOSE_ANSI", "never")],
+            timeout
+        )
     }
 }
 

@@ -1,11 +1,14 @@
 use crate::util::parse_urlencoded;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
 const MAX_HEADER_BYTES: usize = 32 * 1024;
-const MAX_BODY_BYTES: usize = 128 * 1024;
+/// Los webhooks de `push` de GitHub incluyen la lista de commits, así que el
+/// límite anterior de 128 KiB se quedaba corto en pushes grandes.
+const MAX_BODY_BYTES: usize = 512 * 1024;
 
 #[derive(Debug)]
 pub struct Request {
@@ -42,7 +45,10 @@ impl Request {
 pub struct Response {
     status: u16,
     content_type: &'static str,
-    body: Vec<u8>,
+    /// Los archivos estáticos se sirven prestados desde `.rodata`: sin esta
+    /// distinción cada petición de `/app.js` copiaría el bundle entero a un
+    /// `Vec` nuevo, multiplicando el consumo del panel por número de workers.
+    body: Cow<'static, [u8]>,
     headers: Vec<(String, String)>,
 }
 
@@ -51,7 +57,16 @@ impl Response {
         Self {
             status,
             content_type,
-            body,
+            body: Cow::Owned(body),
+            headers: Vec::new(),
+        }
+    }
+
+    fn asset(content_type: &'static str, body: &'static str) -> Self {
+        Self {
+            status: 200,
+            content_type,
+            body: Cow::Borrowed(body.as_bytes()),
             headers: Vec::new(),
         }
     }
@@ -69,23 +84,25 @@ impl Response {
     }
 
     pub fn html(body: &'static str) -> Self {
-        Self::new(200, "text/html; charset=utf-8", body.as_bytes().to_vec())
+        Self::asset("text/html; charset=utf-8", body)
     }
 
     pub fn javascript(body: &'static str) -> Self {
-        Self::new(
-            200,
-            "text/javascript; charset=utf-8",
-            body.as_bytes().to_vec(),
-        )
+        Self::asset("text/javascript; charset=utf-8", body)
     }
 
     pub fn css(body: &'static str) -> Self {
-        Self::new(200, "text/css; charset=utf-8", body.as_bytes().to_vec())
+        Self::asset("text/css; charset=utf-8", body)
     }
 
     pub fn svg(body: &'static str) -> Self {
-        Self::new(200, "image/svg+xml; charset=utf-8", body.as_bytes().to_vec())
+        Self::asset("image/svg+xml; charset=utf-8", body)
+    }
+
+    /// Redirección usada por los retornos del navegador desde GitHub.
+    pub fn redirect(location: &str) -> Self {
+        Self::new(303, "text/plain; charset=utf-8", Vec::new())
+            .with_header("Location", location)
     }
 
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
@@ -109,11 +126,15 @@ impl Response {
         head.push_str("Permissions-Policy: camera=(), microphone=(), geolocation=()\r\n");
         head.push_str("Cross-Origin-Resource-Policy: same-origin\r\n");
         head.push_str("Cache-Control: no-store\r\n");
+        // `form-action` incluye github.com porque el alta «un clic» de la GitHub App
+        // se hace con un POST del navegador al formulario de manifiesto de GitHub.
+        // `img-src` añade los avatares de las cuentas donde está instalada la App.
         head.push_str(concat!(
             "Content-Security-Policy: default-src 'self'; ",
             "connect-src 'self'; script-src 'self'; style-src 'self'; ",
-            "img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; ",
-            "base-uri 'none'; form-action 'self'\r\n"
+            "img-src 'self' data: https://avatars.githubusercontent.com; ",
+            "object-src 'none'; frame-ancestors 'none'; ",
+            "base-uri 'none'; form-action 'self' https://github.com\r\n"
         ));
 
         for (name, value) in self.headers {
@@ -290,6 +311,7 @@ fn reason_phrase(status: u16) -> &'static str {
         201 => "Created",
         202 => "Accepted",
         204 => "No Content",
+        303 => "See Other",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",

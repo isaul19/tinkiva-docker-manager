@@ -1,0 +1,19 @@
+{
+  "name": "tinkiva-docker-manager-web",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Interfaz Preact del panel. El bundle resultante se commitea en web/dist para que cargo build no necesite Node.",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "test": "node build.mjs && node test/render.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "linkedom": "^0.18.13",
+    "lucide-preact": "^0.544.0",
+    "preact": "^10.27.0",
+    "simple-icons": "^15.0.0"
+  }
+}
