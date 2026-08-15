@@ -406,3 +406,4 @@ VALIDATION.md            comprobaciones ejecutadas y límite del entorno generad
 ## Estado del MVP
 
 Versión `0.1.0`. El alcance está intencionalmente congelado en un solo host y un solo administrador. Antes de usarlo con datos críticos, prueba deploy, rollback, reinicio del host y restauración de backups en una EC2 de staging.
+# tinkiva-docker-manager
