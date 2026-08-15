@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1 — 2026-08-15
+
+- En recursos de imagen y repositorio, dejar el **puerto local vacío** publica el
+  servicio en el mismo puerto que escucha el contenedor (`127.0.0.1:3000:3000`). Antes
+  el servicio quedaba solo en la red interna de Docker, inalcanzable desde el host.
+- Ambos puertos vacíos siguen dejando el servicio en la red interna.
+
 ## 0.6.0 — 2026-08-15
 
 ### Rollback para recursos de repositorio
