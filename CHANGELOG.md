@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.8.0 — 2026-08-15
+
+### Editor de variables de entorno
+
+- Botón **Variables** en cada tarjeta de Recurso: lee el `.env` actual y permite modificar,
+  añadir o eliminar variables.
+- Las variables internas que gestiona Tinkiva (`APP_IMAGE`, `TDM_MEMORY_LIMIT`) quedan
+  protegidas y ocultas del editor.
+- El `.env` se guarda atómicamente con permisos `0600`; si el Compose queda inválido o
+  Docker no puede aplicar, se restaura el archivo anterior.
+- Al guardar se recrea el servicio, y los **valores de las variables nunca se escriben**
+  en el historial de despliegues.
+
+### Paginación
+
+- Despliegues, Recursos, Contenedores y Procesos pagan de 10 en 10 con un componente
+  reutilizable, sin librerías nuevas.
+- Despliegues pagina desde el backend (`/api/history/page`): con cientos o miles de
+  registros el navegador solo recibe la página visible.
+- El filtro de Despliegues usa el mismo componente `Select` con chevron que el resto
+  del panel.
+
+### Memoria del host
+
+- La memoria usada ya no cuenta la caché y buffers reclamables de Linux como RAM
+  consumida (`total − free − buffers − reclaimable`).
+- El Resumen muestra la memoria disponible junto al total.
+
+### Correcciones
+
+- Una actualización únicamente de variables de entorno ya no se interpreta como una
+  imagen anterior disponible para rollback.
+- Claves repetidas en el editor de variables se rechazan.
+
 ## 0.7.0 — 2026-08-15
 
 ### Acceso externo opcional
