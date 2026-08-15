@@ -142,6 +142,7 @@ pub struct DatabaseRequest<'a> {
     pub password: &'a str,
     pub root_password: &'a str,
     pub published_port: Option<u16>,
+    pub external_access: bool,
     pub memory_mb: u32,
 }
 
@@ -156,9 +157,10 @@ pub struct GeneratedResource {
 pub fn database(request: &DatabaseRequest) -> GeneratedResource {
     let engine = request.engine;
     let host = format!("{}-{}", request.slug, engine.service);
+    let bind = if request.external_access { "0.0.0.0" } else { "127.0.0.1" };
     let ports = request.published_port.map_or_else(String::new, |port| {
         format!(
-            "    ports:\n      - \"127.0.0.1:{port}:{}\"\n",
+            "    ports:\n      - \"{bind}:{port}:{}\"\n",
             engine.port
         )
     });
@@ -482,6 +484,7 @@ mod tests {
             password: "s3cret-password",
             root_password: "root-password",
             published_port: port,
+            external_access: false,
             memory_mb: 512,
         })
     }
@@ -510,6 +513,22 @@ mod tests {
     fn published_ports_are_bound_to_loopback() {
         let generated = sample("postgres", Some(5433));
         assert!(generated.compose.contains("\"127.0.0.1:5433:5432\""));
+    }
+
+    #[test]
+    fn external_database_ports_are_bound_to_all_interfaces() {
+        let generated = database(&DatabaseRequest {
+            engine: engine("postgres").unwrap(),
+            slug: "demo",
+            database: "app",
+            username: "app",
+            password: "s3cret-password",
+            root_password: "root-password",
+            published_port: Some(5433),
+            external_access: true,
+            memory_mb: 512,
+        });
+        assert!(generated.compose.contains("\"0.0.0.0:5433:5432\""));
     }
 
     #[test]

@@ -1599,6 +1599,7 @@ impl App {
             Ok(port) => port,
             Err(error) => return json_error(422, &error),
         };
+        let external_access = field(&fields, "external_access") == "true";
         let memory_mb = optional_field(&fields, "memory_mb")
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(engine.default_memory_mb)
@@ -1612,6 +1613,7 @@ impl App {
             password: &password,
             root_password: &root_password,
             published_port,
+            external_access,
             memory_mb,
         });
 
@@ -1637,7 +1639,7 @@ impl App {
             },
             Some(&password),
             published_port,
-            false,
+            external_access,
         )
     }
 

@@ -21,6 +21,7 @@ export function DatabaseForm({ onCreated }) {
     username: 'app',
     password: '',
     published_port: '',
+    external_access: false,
     memory_mb: '',
   });
   const [busy, setBusy] = useState(false);
@@ -51,6 +52,7 @@ export function DatabaseForm({ onCreated }) {
         username: engine.needs_username ? form.username : '',
         password: form.password,
         published_port: form.published_port,
+        external_access: form.external_access,
         memory_mb: form.memory_mb || String(engine.default_memory_mb),
       });
       onCreated(result);
@@ -130,7 +132,7 @@ export function DatabaseForm({ onCreated }) {
         </Field>
         <Field
           label="Puerto local (opcional)"
-          hint={`Se publica solo en 127.0.0.1. Interno: ${engine.port}.`}
+          hint={`Interno: ${engine.port}. Se limita al VPS salvo que permitas acceso externo.`}
         >
           <Input
             type="number"
@@ -141,6 +143,23 @@ export function DatabaseForm({ onCreated }) {
             placeholder={String(engine.port)}
           />
         </Field>
+        <label class={`exposure-option field-wide${form.external_access ? ' is-public' : ''}`}>
+          <input
+            type="checkbox"
+            checked={form.external_access}
+            onChange={(event) =>
+              setForm((current) => ({ ...current, external_access: event.currentTarget.checked }))
+            }
+          />
+          <span class="exposure-copy">
+            <strong>Permitir acceso externo al VPS</strong>
+            <span class="field-hint">
+              {form.external_access
+                ? 'La base de datos escuchará en 0.0.0.0. Protege el puerto con firewall, Security Group o una red privada.'
+                : 'La base de datos escuchará en 127.0.0.1. Solo el VPS, un proxy local o un túnel SSH podrán conectarse.'}
+            </span>
+          </span>
+        </label>
       </FormGrid>
 
       <div class="form-actions">
