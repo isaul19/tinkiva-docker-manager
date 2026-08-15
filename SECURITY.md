@@ -2,7 +2,7 @@
 
 ## Modelo de confianza
 
-Tinkiva Deploy Lite es una herramienta administrativa de un solo host. El proceso necesita acceso a Docker y, por tanto, debe tratarse como software con privilegios equivalentes a root. No está diseñado para recibir usuarios, archivos Compose o nombres de imagen de terceros no confiables.
+Tinkiva Docker Manager es una herramienta administrativa de un solo host. El proceso necesita acceso a Docker y, por tanto, debe tratarse como software con privilegios equivalentes a root. No está diseñado para recibir usuarios, archivos Compose o nombres de imagen de terceros no confiables.
 
 ## Controles incluidos
 
@@ -10,7 +10,7 @@ Tinkiva Deploy Lite es una herramienta administrativa de un solo host. El proces
 - Token individual por proyecto para webhooks.
 - Restricción opcional por rama.
 - Validaciones conservadoras para slug, rama, referencia de imagen, contenedor y variables de entorno.
-- Rutas canónicas confinadas a `TDL_ALLOWED_ROOT`.
+- Rutas canónicas confinadas a `TDM_ALLOWED_ROOT`.
 - Escritura atómica del estado y archivos `.env` con permisos restrictivos.
 - Límite de 32 KiB para cabeceras y 128 KiB para cuerpos HTTP.
 - Límite de 2 MiB para logs devueltos.
@@ -21,7 +21,7 @@ Tinkiva Deploy Lite es una herramienta administrativa de un solo host. El proces
 
 ## Operación segura
 
-1. Mantén `TDL_BIND=127.0.0.1:8787`.
+1. Mantén `TDM_BIND=127.0.0.1:8787`.
 2. Usa un reverse proxy HTTPS o un túnel SSH.
 3. Restringe el origen por firewall, VPN o allowlist cuando sea posible.
 4. Usa imágenes inmutables y privadas en GHCR.
@@ -36,8 +36,8 @@ Tinkiva Deploy Lite es una herramienta administrativa de un solo host. El proces
 
 ```bash
 TOKEN=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
-sudo sed -i "s/^TDL_ADMIN_TOKEN=.*/TDL_ADMIN_TOKEN=$TOKEN/" /etc/tinkiva-deploy-lite/env
-sudo systemctl restart tinkiva-deploy-lite
+sudo sed -i "s/^TDM_ADMIN_TOKEN=.*/TDM_ADMIN_TOKEN=$TOKEN/" /etc/tinkiva-docker-manager/env
+sudo systemctl restart tinkiva-docker-manager
 printf '%s\n' "$TOKEN"
 ```
 

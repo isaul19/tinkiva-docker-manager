@@ -1,6 +1,6 @@
 'use strict';
 
-const TOKEN_KEY = 'tdl_admin_token';
+const TOKEN_KEY = 'tdm_admin_token';
 const titles = {
   dashboard: ['OPERACIONES', 'Resumen'],
   containers: ['DOCKER', 'Contenedores'],
@@ -407,7 +407,7 @@ async function loadSystem() {
   state.metrics = metrics;
   updateDockerStatus();
   $('#system-content').innerHTML = `
-    <article class="panel settings-card"><p class="eyebrow">PANEL</p><h3>Tinkiva Deploy Lite</h3><dl>
+    <article class="panel settings-card"><p class="eyebrow">PANEL</p><h3>Tinkiva Docker Manager</h3><dl>
       <div><dt>Versión</dt><dd>${escapeHtml(info.version)}</dd></div>
       <div><dt>RSS actual</dt><dd>${escapeHtml(formatBytes(metrics.process_rss))}</dd></div>
       <div><dt>Workers</dt><dd>${escapeHtml(info.workers)}</dd></div>

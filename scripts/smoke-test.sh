@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-BINARY=${1:-target/release/tinkiva-deploy-lite}
+BINARY=${1:-target/release/tinkiva-docker-manager}
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BINARY=$(realpath "$BINARY")
 TMP=$(mktemp -d)
@@ -26,12 +26,12 @@ services:
 YAML
 printf 'APP_IMAGE=ghcr.io/example/app:zero\n' > "$TMP/apps/demo/.env"
 
-TDL_BIND="127.0.0.1:$PORT" \
-TDL_ADMIN_TOKEN="$TOKEN" \
-TDL_DATA_DIR="$TMP/data" \
-TDL_ALLOWED_ROOT="$TMP/apps" \
-TDL_DOCKER_BIN="$ROOT/tests/mock-docker.sh" \
-TDL_WORKERS=2 \
+TDM_BIND="127.0.0.1:$PORT" \
+TDM_ADMIN_TOKEN="$TOKEN" \
+TDM_DATA_DIR="$TMP/data" \
+TDM_ALLOWED_ROOT="$TMP/apps" \
+TDM_DOCKER_BIN="$ROOT/tests/mock-docker.sh" \
+TDM_WORKERS=2 \
 "$BINARY" >"$TMP/server.log" 2>&1 &
 PID=$!
 

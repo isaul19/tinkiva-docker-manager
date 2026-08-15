@@ -144,7 +144,7 @@ impl Store {
 }
 
 fn serialize_state(state: &PersistedState) -> String {
-    let mut output = format!("TDL1\t{}\n", state.next_deployment_id);
+    let mut output = format!("TDM1\t{}\n", state.next_deployment_id);
 
     for project in &state.projects {
         let fields = [
@@ -195,7 +195,7 @@ fn parse_state(contents: &str) -> Result<PersistedState, String> {
     let mut lines = contents.lines();
     let header = lines.next().ok_or_else(|| "estado vacío".to_owned())?;
     let mut header_fields = header.split('\t');
-    if header_fields.next() != Some("TDL1") {
+    if header_fields.next() != Some("TDM1") {
         return Err("formato de estado no reconocido".to_owned());
     }
     let next_deployment_id = header_fields

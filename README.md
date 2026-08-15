@@ -1,4 +1,4 @@
-# Tinkiva Deploy Lite
+# Tinkiva Docker Manager
 
 Panel de despliegue Docker de un solo nodo, escrito en Rust y diseñado para servidores pequeños. Su objetivo no es reemplazar Coolify, Dokploy o Portainer: cubre únicamente el flujo esencial de Tinkiva con el menor número posible de procesos permanentes.
 
@@ -45,7 +45,7 @@ GitHub Actions
         │
         │ POST HTTPS + token + image SHA
         ▼
-Tinkiva Deploy Lite (Rust, un proceso)
+Tinkiva Docker Manager (Rust, un proceso)
         │
         ├── actualiza APP_IMAGE en .env de forma atómica
         ├── docker compose pull
@@ -69,15 +69,15 @@ Funciona en `x86_64` y `aarch64/arm64` al compilar nativamente para la arquitect
 ## Compilar
 
 ```bash
-unzip tinkiva-deploy-lite.zip
-cd tinkiva-deploy-lite
+unzip tinkiva-docker-manager.zip
+cd tinkiva-docker-manager
 ./scripts/build-release.sh
 ```
 
 El binario quedará en:
 
 ```text
-target/release/tinkiva-deploy-lite
+target/release/tinkiva-docker-manager
 ```
 
 El perfil release prioriza tamaño: `opt-level = "z"`, LTO completo, un codegen unit, símbolos removidos y `panic = "abort"`. El estado de las comprobaciones realizadas al generar el paquete está documentado en [`VALIDATION.md`](VALIDATION.md).
@@ -88,7 +88,7 @@ El repositorio incluye un Docker CLI simulado y un smoke test del ciclo completo
 
 ```bash
 cargo build --release
-./scripts/smoke-test.sh target/release/tinkiva-deploy-lite
+./scripts/smoke-test.sh target/release/tinkiva-docker-manager
 ```
 
 Valida:
@@ -105,30 +105,30 @@ Valida:
 ## Instalar con systemd
 
 ```bash
-sudo ./scripts/install.sh target/release/tinkiva-deploy-lite
+sudo ./scripts/install.sh target/release/tinkiva-docker-manager
 ```
 
 El script crea:
 
 ```text
-/usr/local/bin/tinkiva-deploy-lite
-/etc/tinkiva-deploy-lite/env
-/etc/systemd/system/tinkiva-deploy-lite.service
-/var/lib/tinkiva-deploy-lite/
+/usr/local/bin/tinkiva-docker-manager
+/etc/tinkiva-docker-manager/env
+/etc/systemd/system/tinkiva-docker-manager.service
+/var/lib/tinkiva-docker-manager/
 /opt/tinkiva/apps/
 ```
 
 Al terminar imprime el token administrador. También puedes verlo como root:
 
 ```bash
-sudo sed -n 's/^TDL_ADMIN_TOKEN=//p' /etc/tinkiva-deploy-lite/env
+sudo sed -n 's/^TDM_ADMIN_TOKEN=//p' /etc/tinkiva-docker-manager/env
 ```
 
 Estado y logs del panel:
 
 ```bash
-sudo systemctl status tinkiva-deploy-lite
-sudo journalctl -u tinkiva-deploy-lite -f
+sudo systemctl status tinkiva-docker-manager
+sudo journalctl -u tinkiva-docker-manager -f
 ```
 
 ## Acceder de forma privada
@@ -164,7 +164,7 @@ sudo mkdir -p /opt/tinkiva/apps/storagia
 sudo cp examples/app/compose.yaml /opt/tinkiva/apps/storagia/compose.yaml
 sudo cp examples/app/.env.example /opt/tinkiva/apps/storagia/.env
 sudo cp examples/app/runtime.env.example /opt/tinkiva/apps/storagia/runtime.env
-sudo chown -R tinkiva-deploy:docker /opt/tinkiva/apps/storagia
+sudo chown -R tinkiva-docker:docker /opt/tinkiva/apps/storagia
 sudo chmod 750 /opt/tinkiva/apps/storagia
 sudo chmod 600 /opt/tinkiva/apps/storagia/.env /opt/tinkiva/apps/storagia/runtime.env
 ```
@@ -183,7 +183,7 @@ Y `.env` contiene únicamente la imagen desplegable:
 APP_IMAGE=ghcr.io/isaul19/storagia-api:sha-inicial
 ```
 
-Se recomienda separar los secretos de runtime en `runtime.env`. Tinkiva Deploy Lite solo necesita modificar `APP_IMAGE`.
+Se recomienda separar los secretos de runtime en `runtime.env`. Tinkiva Docker Manager solo necesita modificar `APP_IMAGE`.
 
 Desde el panel registra:
 
@@ -196,7 +196,7 @@ Variable:      APP_IMAGE
 Rama:          main
 ```
 
-Las rutas relativas se resuelven dentro de `TDL_ALLOWED_ROOT`. Las rutas canónicas fuera de esa raíz se rechazan, incluyendo escapes mediante enlaces simbólicos.
+Las rutas relativas se resuelven dentro de `TDM_ALLOWED_ROOT`. Las rutas canónicas fuera de esa raíz se rechazan, incluyendo escapes mediante enlaces simbólicos.
 
 ## GitHub Actions
 
@@ -209,8 +209,8 @@ Copia `examples/github-deploy.yml` a tu repositorio como:
 Configura dos secretos en GitHub:
 
 ```text
-TDL_WEBHOOK_URL   = https://deploy.tudominio.com/hooks/deploy/storagia-api
-TDL_WEBHOOK_TOKEN = token mostrado en la tarjeta del proyecto
+TDM_WEBHOOK_URL   = https://deploy.tudominio.com/hooks/deploy/storagia-api
+TDM_WEBHOOK_TOKEN = token mostrado en la tarjeta del proyecto
 ```
 
 El workflow:
@@ -228,16 +228,16 @@ Si el paquete de GHCR es privado, autentica una sola vez al usuario del servicio
 
 ```bash
 printf '%s' 'TU_GITHUB_PAT' | \
-  sudo -u tinkiva-deploy env HOME=/var/lib/tinkiva-deploy-lite \
+  sudo -u tinkiva-docker env HOME=/var/lib/tinkiva-docker-manager \
   docker login ghcr.io -u TU_USUARIO_GITHUB --password-stdin
 ```
 
-Docker guardará la credencial en `/var/lib/tinkiva-deploy-lite/.docker/config.json`, dentro de una ruta accesible para el servicio. Restringe ese archivo a su propietario:
+Docker guardará la credencial en `/var/lib/tinkiva-docker-manager/.docker/config.json`, dentro de una ruta accesible para el servicio. Restringe ese archivo a su propietario:
 
 ```bash
-sudo chown -R tinkiva-deploy:tinkiva-deploy /var/lib/tinkiva-deploy-lite/.docker
-sudo chmod 700 /var/lib/tinkiva-deploy-lite/.docker
-sudo chmod 600 /var/lib/tinkiva-deploy-lite/.docker/config.json
+sudo chown -R tinkiva-docker:tinkiva-docker /var/lib/tinkiva-docker-manager/.docker
+sudo chmod 700 /var/lib/tinkiva-docker-manager/.docker
+sudo chmod 600 /var/lib/tinkiva-docker-manager/.docker/config.json
 ```
 
 Para evitar almacenar una credencial en el servidor, publica la imagen como paquete público. No incluyas el token de GitHub dentro del webhook ni del archivo Compose.
@@ -287,22 +287,22 @@ La contraseña generada se muestra en la respuesta de creación. Guárdala inmed
 
 ## Configuración
 
-Archivo predeterminado: `/etc/tinkiva-deploy-lite/env`.
+Archivo predeterminado: `/etc/tinkiva-docker-manager/env`.
 
 | Variable | Predeterminado | Descripción |
 |---|---|---|
-| `TDL_BIND` | `127.0.0.1:8787` | Dirección HTTP. |
-| `TDL_ADMIN_TOKEN` | obligatorio | Token Bearer de 32 a 256 caracteres. |
-| `TDL_DATA_DIR` | `/var/lib/tinkiva-deploy-lite` | Estado local. |
-| `TDL_ALLOWED_ROOT` | `/opt/tinkiva/apps` | Única raíz aceptada para Compose y `.env`. |
-| `TDL_DOCKER_BIN` | `docker` | Ruta del Docker CLI. |
-| `TDL_WORKERS` | `2` | Workers HTTP fijos; rango 1–16. |
-| `TDL_MAX_HISTORY` | `200` | Registros conservados; rango 10–10,000. |
+| `TDM_BIND` | `127.0.0.1:8787` | Dirección HTTP. |
+| `TDM_ADMIN_TOKEN` | obligatorio | Token Bearer de 32 a 256 caracteres. |
+| `TDM_DATA_DIR` | `/var/lib/tinkiva-docker-manager` | Estado local. |
+| `TDM_ALLOWED_ROOT` | `/opt/tinkiva/apps` | Única raíz aceptada para Compose y `.env`. |
+| `TDM_DOCKER_BIN` | `docker` | Ruta del Docker CLI. |
+| `TDM_WORKERS` | `2` | Workers HTTP fijos; rango 1–16. |
+| `TDM_MAX_HISTORY` | `200` | Registros conservados; rango 10–10,000. |
 
 Después de editar:
 
 ```bash
-sudo systemctl restart tinkiva-deploy-lite
+sudo systemctl restart tinkiva-docker-manager
 ```
 
 ## API esencial
@@ -310,7 +310,7 @@ sudo systemctl restart tinkiva-deploy-lite
 Todas las rutas `/api/*` requieren:
 
 ```http
-Authorization: Bearer <TDL_ADMIN_TOKEN>
+Authorization: Bearer <TDM_ADMIN_TOKEN>
 ```
 
 | Método | Ruta | Uso |
@@ -352,8 +352,8 @@ Importante: durante un despliegue, el cgroup del servicio también ejecuta tempo
 Los valores predeterminados ya están ajustados para un servidor pequeño:
 
 ```dotenv
-TDL_WORKERS=2
-TDL_MAX_HISTORY=200
+TDM_WORKERS=2
+TDM_MAX_HISTORY=200
 ```
 
 No se fija `MemoryMax=100M` en systemd porque podría matar el Docker CLI durante un pull. Primero mide y luego añade un límite solo si tus pruebas lo soportan.
@@ -364,9 +364,9 @@ El usuario del servicio pertenece al grupo `docker`. En Linux, controlar Docker 
 
 - Instálalo solo en servidores tuyos y para administradores de confianza.
 - No es una plataforma multi-tenant.
-- Protege el token y rota `/etc/tinkiva-deploy-lite/env` si se filtra.
+- Protege el token y rota `/etc/tinkiva-docker-manager/env` si se filtra.
 - Usa HTTPS para cualquier acceso remoto.
-- Mantén `TDL_ALLOWED_ROOT` dedicado únicamente a stacks administrados.
+- Mantén `TDM_ALLOWED_ROOT` dedicado únicamente a stacks administrados.
 - No permitas que usuarios no confiables editen los archivos Compose.
 - No introduzcas texto no confiable en nombres de imágenes, ramas o variables.
 - Limita el acceso al panel con firewall, VPN o una red privada cuando sea posible.
@@ -406,4 +406,3 @@ VALIDATION.md            comprobaciones ejecutadas y límite del entorno generad
 ## Estado del MVP
 
 Versión `0.1.0`. El alcance está intencionalmente congelado en un solo host y un solo administrador. Antes de usarlo con datos críticos, prueba deploy, rollback, reinicio del host y restauración de backups en una EC2 de staging.
-# tinkiva-docker-manager

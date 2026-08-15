@@ -399,8 +399,8 @@ impl DockerClient {
     {
         let temporary_directory = std::env::temp_dir();
         let suffix = unique_suffix();
-        let stdout_path = temporary_directory.join(format!("tdl-{suffix}.stdout"));
-        let stderr_path = temporary_directory.join(format!("tdl-{suffix}.stderr"));
+        let stdout_path = temporary_directory.join(format!("tdm-{suffix}.stdout"));
+        let stderr_path = temporary_directory.join(format!("tdm-{suffix}.stderr"));
 
         let stdout_file = OpenOptions::new()
             .create_new(true)

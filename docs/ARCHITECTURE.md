@@ -15,7 +15,7 @@ No se usa runtime asíncrono. Para el nivel de concurrencia esperado en un panel
 
 ## Persistencia
 
-`state.db` es un formato de líneas `TDL1`, no una base de datos. Cada campo textual se codifica por porcentaje, y cada modificación reescribe el archivo mediante:
+`state.db` es un formato de líneas `TDM1`, no una base de datos. Cada campo textual se codifica por porcentaje, y cada modificación reescribe el archivo mediante:
 
 1. Archivo temporal `0600` en el mismo directorio.
 2. `write_all`.
@@ -23,7 +23,7 @@ No se usa runtime asíncrono. Para el nivel de concurrencia esperado en un panel
 4. `rename` atómico.
 5. Sincronización del directorio cuando es posible.
 
-El historial está acotado por `TDL_MAX_HISTORY`.
+El historial está acotado por `TDM_MAX_HISTORY`.
 
 ## Docker
 

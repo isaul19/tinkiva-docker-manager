@@ -1,17 +1,17 @@
 [Unit]
-Description=Tinkiva Deploy Lite
-Documentation=file:/usr/local/share/doc/tinkiva-deploy-lite/README.md
+Description=Tinkiva Docker Manager
+Documentation=file:/usr/local/share/doc/tinkiva-docker-manager/README.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=tinkiva-deploy
-Group=tinkiva-deploy
+User=tinkiva-docker
+Group=tinkiva-docker
 SupplementaryGroups=docker
-EnvironmentFile=/etc/tinkiva-deploy-lite/env
-Environment=HOME=/var/lib/tinkiva-deploy-lite
-ExecStart=/usr/local/bin/tinkiva-deploy-lite
+EnvironmentFile=/etc/tinkiva-docker-manager/env
+Environment=HOME=/var/lib/tinkiva-docker-manager
+ExecStart=/usr/local/bin/tinkiva-docker-manager
 Restart=on-failure
 RestartSec=3s
 TimeoutStopSec=15s
@@ -23,7 +23,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/tinkiva-deploy-lite /opt/tinkiva/apps
+ReadWritePaths=/var/lib/tinkiva-docker-manager /opt/tinkiva/apps
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

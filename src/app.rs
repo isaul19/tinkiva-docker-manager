@@ -34,20 +34,20 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Self, String> {
-        let bind = env::var("TDL_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_owned());
-        let admin_token = env::var("TDL_ADMIN_TOKEN")
-            .map_err(|_| "TDL_ADMIN_TOKEN es obligatorio".to_owned())?;
+        let bind = env::var("TDM_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_owned());
+        let admin_token = env::var("TDM_ADMIN_TOKEN")
+            .map_err(|_| "TDM_ADMIN_TOKEN es obligatorio".to_owned())?;
         if admin_token.len() < 32 || admin_token.len() > 256 || admin_token.chars().any(char::is_whitespace)
         {
-            return Err("TDL_ADMIN_TOKEN debe tener entre 32 y 256 caracteres sin espacios".to_owned());
+            return Err("TDM_ADMIN_TOKEN debe tener entre 32 y 256 caracteres sin espacios".to_owned());
         }
 
         let data_dir = PathBuf::from(
-            env::var("TDL_DATA_DIR")
-                .unwrap_or_else(|_| "/var/lib/tinkiva-deploy-lite".to_owned()),
+            env::var("TDM_DATA_DIR")
+                .unwrap_or_else(|_| "/var/lib/tinkiva-docker-manager".to_owned()),
         );
         let allowed_root = PathBuf::from(
-            env::var("TDL_ALLOWED_ROOT").unwrap_or_else(|_| "/opt/tinkiva/apps".to_owned()),
+            env::var("TDM_ALLOWED_ROOT").unwrap_or_else(|_| "/opt/tinkiva/apps".to_owned()),
         );
         fs::create_dir_all(&data_dir)
             .map_err(|error| format!("no se pudo crear {}: {error}", data_dir.display()))?;
@@ -63,12 +63,12 @@ impl Config {
             .canonicalize()
             .map_err(|error| format!("no se pudo resolver {}: {error}", data_dir.display()))?;
 
-        let workers = env::var("TDL_WORKERS")
+        let workers = env::var("TDM_WORKERS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(2)
             .clamp(1, 16);
-        let max_history = env::var("TDL_MAX_HISTORY")
+        let max_history = env::var("TDM_MAX_HISTORY")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(200)
@@ -80,7 +80,7 @@ impl Config {
             data_dir,
             allowed_root,
             docker_binary: PathBuf::from(
-                env::var("TDL_DOCKER_BIN").unwrap_or_else(|_| "docker".to_owned()),
+                env::var("TDM_DOCKER_BIN").unwrap_or_else(|_| "docker".to_owned()),
             ),
             workers,
             max_history,
@@ -236,7 +236,7 @@ impl App {
             format!(
                 concat!(
                     "{{",
-                    "\"name\":\"Tinkiva Deploy Lite\",",
+                    "\"name\":\"Tinkiva Docker Manager\",",,
                     "\"version\":{},",
                     "\"started_at\":{},",
                     "\"allowed_root\":{},",

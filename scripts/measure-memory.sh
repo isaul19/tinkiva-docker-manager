@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-SERVICE=${1:-tinkiva-deploy-lite.service}
+SERVICE=${1:-tinkiva-docker-manager.service}
 PID=$(systemctl show "$SERVICE" -p MainPID --value)
 if [[ -z "$PID" || "$PID" == 0 ]]; then
   echo "El servicio no está activo." >&2

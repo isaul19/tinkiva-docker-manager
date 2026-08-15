@@ -1,7 +1,7 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code, unused_imports))]
 
 #[cfg(not(target_os = "linux"))]
-compile_error!("Tinkiva Deploy Lite solo soporta Linux porque utiliza /proc, df y Docker.");
+compile_error!("Tinkiva Docker Manager solo soporta Linux porque utiliza /proc, df y Docker.");
 
 mod app;
 mod docker;
@@ -19,7 +19,7 @@ use std::thread;
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("tinkiva-deploy-lite: {error}");
+        eprintln!("tinkiva-docker-manager: {error}");
         std::process::exit(1);
     }
 }
@@ -39,14 +39,14 @@ fn run() -> Result<(), String> {
         let app = Arc::clone(&app);
         let receiver = Arc::clone(&receiver);
         thread::Builder::new()
-            .name(format!("tdl-http-{worker_id}"))
+            .name(format!("tdm-http-{worker_id}"))
             .stack_size(512 * 1024)
             .spawn(move || worker_loop(app, receiver))
             .map_err(|error| format!("no se pudo iniciar worker HTTP: {error}"))?;
     }
 
     eprintln!(
-        "Tinkiva Deploy Lite {} escuchando en {} con {} workers; raíz permitida: {}",
+        "Tinkiva Docker Manager {} escuchando en {} con {} workers; raíz permitida: {}",
         env!("CARGO_PKG_VERSION"),
         bind,
         workers,

@@ -38,10 +38,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Deploy through Tinkiva Deploy Lite
+      - name: Deploy through Tinkiva Docker Manager
         env:
-          WEBHOOK_URL: ${{ secrets.TDL_WEBHOOK_URL }}
-          WEBHOOK_TOKEN: ${{ secrets.TDL_WEBHOOK_TOKEN }}
+          WEBHOOK_URL: ${{ secrets.TDM_WEBHOOK_URL }}
+          WEBHOOK_TOKEN: ${{ secrets.TDM_WEBHOOK_TOKEN }}
           IMAGE: ghcr.io/${{ github.repository_owner }}/mi-api:${{ github.sha }}
           BRANCH: ${{ github.ref_name }}
           COMMIT: ${{ github.sha }}
