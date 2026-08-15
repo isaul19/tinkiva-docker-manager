@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.0 — 2026-08-15
+
+### Auto-deploy sin exponer el panel
+
+- El redespliegue automático pasa de webhook entrante a **polling saliente**: un watcher
+  consulta el SHA de la rama en la API de GitHub y el digest de la imagen en el registry,
+  y solo recrea el servicio cuando cambia lo aplicado. El panel puede quedarse en
+  `localhost`: no necesita dominio, TLS ni puerto público.
+- El manifiesto de la GitHub App ya no pide webhook ni el evento `push`; el alta manual
+  deja de pedir el secreto de webhook.
+- Intervalo configurable con `TDM_POLL_INTERVAL_SECONDS` (30 s – 24 h, por defecto 60).
+  `TDM_PUBLIC_URL` desaparece porque ya no hace falta.
+- Las imágenes admiten referencias exactas de otros registries (`ghcr.io/owner/repo:tag`),
+  con Auto Deploy opcional comparando el digest.
+
+### Interno
+
+- Formato de estado `TDM3` con `auto_deploy` y revisión aplicada; `TDM1` y `TDM2` se
+  siguen leyendo y se migran al primer guardado.
+- 44 pruebas unitarias y smoke test actualizados al nuevo flujo.
+
 ## 0.2.0 — 2026-08-15
 
 ### Alta de recursos
