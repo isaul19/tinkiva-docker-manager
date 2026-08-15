@@ -318,6 +318,7 @@ Authorization: Bearer <TDM_ADMIN_TOKEN>
 | `GET` | `/healthz` | Salud sin autenticación. |
 | `GET` | `/api/info` | Versión, rutas y Docker. |
 | `GET` | `/api/system` | Métricas del host y RSS. |
+| `GET` | `/api/processes` | Top procesos del host por CPU y RAM. |
 | `GET` | `/api/containers` | Contenedores y stats. |
 | `GET` | `/api/containers/:id/logs?tail=300` | Logs. |
 | `POST` | `/api/containers/:id/start` | Iniciar. |

@@ -1,6 +1,8 @@
 use crate::docker::{CommandResult, DockerClient};
 use crate::http::{Request, Response};
-use crate::metrics::HostMetrics;
+use crate::metrics::{
+    collect_processes, processes_to_json, HostMetrics,
+};
 use crate::model::{Deployment, Project};
 use crate::store::Store;
 use crate::util::{
@@ -164,6 +166,7 @@ impl App {
         match (method, segments.as_slice()) {
             ("GET", ["api", "info"]) => self.info(),
             ("GET", ["api", "system"]) => self.system_metrics(),
+            ("GET", ["api", "processes"]) => self.list_processes(),
             ("GET", ["api", "containers"]) => self.list_containers(),
             ("GET", ["api", "containers", container, "logs"]) => {
                 self.container_logs(container, request)
@@ -262,6 +265,13 @@ impl App {
     fn system_metrics(&self) -> Response {
         match HostMetrics::collect() {
             Ok(metrics) => Response::json(200, metrics.to_json()),
+            Err(error) => json_error(500, &error),
+        }
+    }
+
+    fn list_processes(&self) -> Response {
+        match collect_processes() {
+            Ok(entries) => Response::json(200, processes_to_json(&entries)),
             Err(error) => json_error(500, &error),
         }
     }
