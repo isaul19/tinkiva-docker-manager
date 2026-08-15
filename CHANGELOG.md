@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2 — 2026-08-14
+
+- Nueva página de Procesos del host: top por CPU y RAM con ordenamiento.
+- Iconos en el sidebar y rediseño del menú de navegación.
+- Asistente de primera ejecución (`tinkivadm config`) que genera `tinkiva.env`.
+- Gestión de demonio sin systemd: `tinkivadm start`, `stop` y `status` con pid file y log.
+- Auto-actualización: `tinkivadm update [versión]` descarga de GitHub Releases y verifica sha256.
+- Binario renombrado a `tinkivadm`; binarios de release estáticos (musl) compatibles con Amazon Linux.
+- README reestructurado con guía de instalación de extremo a extremo.
+
 ## 0.1.1 — 2026-08-14
 
 - Renombrado del proyecto a Tinkiva Docker Manager: binario, servicio systemd, usuario `tinkiva-docker`, rutas y variables `TDM_*`.
