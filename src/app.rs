@@ -36,20 +36,34 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Self, String> {
-        let bind = env::var("TDM_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_owned());
-        let admin_token = env::var("TDM_ADMIN_TOKEN")
-            .map_err(|_| "TDM_ADMIN_TOKEN es obligatorio".to_owned())?;
+        let file_settings = if env::var("TDM_ADMIN_TOKEN").is_ok() {
+            HashMap::new()
+        } else {
+            match crate::setup::read_config_file() {
+                Some(settings) => settings,
+                None => crate::setup::run_wizard()?,
+            }
+        };
+        let setting = |key: &str| {
+            env::var(key)
+                .ok()
+                .or_else(|| file_settings.get(key).cloned())
+        };
+
+        let bind = setting("TDM_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_owned());
+        let admin_token = setting("TDM_ADMIN_TOKEN")
+            .ok_or_else(|| "TDM_ADMIN_TOKEN es obligatorio".to_owned())?;
         if admin_token.len() < 32 || admin_token.len() > 256 || admin_token.chars().any(char::is_whitespace)
         {
             return Err("TDM_ADMIN_TOKEN debe tener entre 32 y 256 caracteres sin espacios".to_owned());
         }
 
         let data_dir = PathBuf::from(
-            env::var("TDM_DATA_DIR")
+            setting("TDM_DATA_DIR")
                 .unwrap_or_else(|_| "/var/lib/tinkiva-docker-manager".to_owned()),
         );
         let allowed_root = PathBuf::from(
-            env::var("TDM_ALLOWED_ROOT").unwrap_or_else(|_| "/opt/tinkiva/apps".to_owned()),
+            setting("TDM_ALLOWED_ROOT").unwrap_or_else(|_| "/opt/tinkiva/apps".to_owned()),
         );
         fs::create_dir_all(&data_dir)
             .map_err(|error| format!("no se pudo crear {}: {error}", data_dir.display()))?;
@@ -65,13 +79,11 @@ impl Config {
             .canonicalize()
             .map_err(|error| format!("no se pudo resolver {}: {error}", data_dir.display()))?;
 
-        let workers = env::var("TDM_WORKERS")
-            .ok()
+        let workers = setting("TDM_WORKERS")
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(2)
             .clamp(1, 16);
-        let max_history = env::var("TDM_MAX_HISTORY")
-            .ok()
+        let max_history = setting("TDM_MAX_HISTORY")
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(200)
             .clamp(10, 10_000);
@@ -82,7 +94,7 @@ impl Config {
             data_dir,
             allowed_root,
             docker_binary: PathBuf::from(
-                env::var("TDM_DOCKER_BIN").unwrap_or_else(|_| "docker".to_owned()),
+                setting("TDM_DOCKER_BIN").unwrap_or_else(|_| "docker".to_owned()),
             ),
             workers,
             max_history,

@@ -8,6 +8,7 @@ mod docker;
 mod http;
 mod metrics;
 mod model;
+mod setup;
 mod store;
 mod util;
 
