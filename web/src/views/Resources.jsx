@@ -1,46 +1,37 @@
-import { useState } from 'preact/hooks';
-import {
-  Boxes,
-  FileText,
-  Github,
-  Layers,
-  Rocket,
-  Trash2,
-  Undo2,
-  Webhook,
-} from 'lucide-preact';
-import { api } from '../lib/api.js';
-import { useApp } from '../lib/context.js';
-import { useAsync, usePolling } from '../lib/hooks.js';
-import { formatRelative } from '../lib/format.js';
-import { BrandIcon, hasBrand } from '../ui/BrandIcon.jsx';
-import { AsyncBlock, Badge, Button, EmptyState, Panel } from '../ui/Primitives.jsx';
-import { CopyValue, Field, FormGrid, Input, Select } from '../ui/Form.jsx';
-import { Modal } from '../ui/Modal.jsx';
-import { useToast } from '../ui/Toast.jsx';
-import { LogsDialog } from './LogsDialog.jsx';
+import { useState } from "preact/hooks";
+import { Boxes, FileText, Github, Layers, Rocket, Trash2, Undo2, Webhook } from "lucide-preact";
+import { api } from "../lib/api.js";
+import { useApp } from "../lib/context.js";
+import { useAsync, usePolling } from "../lib/hooks.js";
+import { formatRelative } from "../lib/format.js";
+import { BrandIcon, hasBrand } from "../ui/BrandIcon.jsx";
+import { AsyncBlock, Badge, Button, EmptyState, Panel } from "../ui/Primitives.jsx";
+import { CopyValue, Field, FormGrid, Input, Select } from "../ui/Form.jsx";
+import { Modal } from "../ui/Modal.jsx";
+import { useToast } from "../ui/Toast.jsx";
+import { LogsDialog } from "./LogsDialog.jsx";
 
 const KIND_LABEL = {
-  database: 'Base de datos',
-  image: 'Imagen',
-  repository: 'Repositorio',
-  compose: 'Compose',
+  database: "Base de datos",
+  image: "Imagen",
+  repository: "Repositorio",
+  compose: "Compose",
 };
 
 const STATUS = {
-  running: { label: 'Corriendo', tone: 'ok' },
-  stopped: { label: 'Apagado', tone: 'neutral' },
-  error: { label: 'Error · se detuvo', tone: 'danger' },
+  running: { label: "Corriendo", tone: "ok" },
+  stopped: { label: "Apagado", tone: "neutral" },
+  error: { label: "Detenido", tone: "danger" },
 };
 
 function ResourceIcon({ project }) {
-  if (project.kind === 'database' && hasBrand(project.engine)) {
+  if (project.kind === "database" && hasBrand(project.engine)) {
     return <BrandIcon slug={project.engine} size={22} />;
   }
-  if (project.kind === 'image' && hasBrand(project.engine)) {
+  if (project.kind === "image" && hasBrand(project.engine)) {
     return <BrandIcon slug={project.engine} size={22} />;
   }
-  if (project.kind === 'repository') return <Github size={22} />;
+  if (project.kind === "repository") return <Github size={22} />;
   return <Layers size={22} />;
 }
 
@@ -52,7 +43,7 @@ export function Resources() {
   const [deleteFor, setDeleteFor] = useState(null);
   const [busy, setBusy] = useState(null);
 
-  const projects = useAsync(() => api.get('/api/projects'), [refreshToken]);
+  const projects = useAsync(() => api.get("/api/projects"), [refreshToken]);
   usePolling(projects.reload, 15_000);
 
   const rollback = async (project) => {
@@ -72,8 +63,8 @@ export function Resources() {
     setBusy(`${project.slug}:deploy`);
     try {
       const deployment = await api.post(`/api/projects/${project.slug}/deploy`, form);
-      if (deployment.status === 'success') toast.success(`${project.name} desplegado.`);
-      else toast.error(deployment.message || 'El despliegue falló.');
+      if (deployment.status === "success") toast.success(`${project.name} desplegado.`);
+      else toast.error(deployment.message || "El despliegue falló.");
       setDeployFor(null);
       projects.reload();
       refresh();
@@ -89,7 +80,7 @@ export function Resources() {
     try {
       const result = await api.del(
         `/api/projects/${project.slug}`,
-        mode === 'none' ? {} : { remove: mode },
+        mode === "none" ? {} : { remove: mode },
       );
       toast.success(result.message);
       setDeleteFor(null);
@@ -144,8 +135,8 @@ export function Resources() {
                     <span class="muted mono small">{project.slug}</span>
                   </div>
                   <div class="resource-badges">
-                    <Badge tone={STATUS[project.runtime_status]?.tone || 'neutral'}>
-                      {STATUS[project.runtime_status]?.label || 'Apagado'}
+                    <Badge tone={STATUS[project.runtime_status]?.tone || "neutral"}>
+                      {STATUS[project.runtime_status]?.label || "Apagado"}
                     </Badge>
                     <Badge tone="neutral">{KIND_LABEL[project.kind] || project.kind}</Badge>
                   </div>
@@ -157,7 +148,7 @@ export function Resources() {
                       <dt>Repositorio</dt>
                       <dd class="mono">
                         {project.repository}
-                        {project.branch ? ` · ${project.branch}` : ''}
+                        {project.branch ? ` · ${project.branch}` : ""}
                       </dd>
                     </div>
                   ) : null}
@@ -179,12 +170,12 @@ export function Resources() {
                       {project.last_deployment ? (
                         <>
                           {formatRelative(project.last_deployment.created_at)}
-                          {project.last_deployment.status !== 'success' ? (
+                          {project.last_deployment.status !== "success" ? (
                             <span class="danger-text"> · falló</span>
                           ) : null}
                         </>
                       ) : (
-                        'Todavía no'
+                        "Todavía no"
                       )}
                     </dd>
                   </div>
@@ -194,7 +185,10 @@ export function Resources() {
                   <summary>
                     <Webhook size={14} /> Webhook de despliegue
                   </summary>
-                  <CopyValue label="URL" value={`${window.location.origin}/hooks/deploy/${project.slug}`} />
+                  <CopyValue
+                    label="URL"
+                    value={`${window.location.origin}/hooks/deploy/${project.slug}`}
+                  />
                   <CopyValue label="Token" value={project.webhook_token} masked />
                 </details>
 
@@ -213,7 +207,7 @@ export function Resources() {
                     loading={busy === `${project.slug}:deploy`}
                     onClick={() => setDeployFor(project)}
                   >
-                    {project.runtime_status === 'running' ? 'Redesplegar' : 'Desplegar'}
+                    {project.runtime_status === "running" ? "Redesplegar" : "Desplegar"}
                   </Button>
                   <Button size="sm" icon={FileText} onClick={() => setLogsFor(project)}>
                     Logs
@@ -224,7 +218,9 @@ export function Resources() {
                     loading={busy === `${project.slug}:rollback`}
                     disabled={!project.can_rollback}
                     onClick={() => rollback(project)}
-                    title={project.can_rollback ? 'Volver a la imagen anterior' : project.rollback_reason}
+                    title={
+                      project.can_rollback ? "Volver a la imagen anterior" : project.rollback_reason
+                    }
                   >
                     Rollback
                   </Button>
@@ -252,14 +248,14 @@ export function Resources() {
 
       <DeployDialog
         project={deployFor}
-        busy={busy?.endsWith(':deploy')}
+        busy={busy?.endsWith(":deploy")}
         onClose={() => setDeployFor(null)}
         onSubmit={deploy}
       />
 
       <DeleteDialog
         project={deleteFor}
-        busy={busy?.endsWith(':delete')}
+        busy={busy?.endsWith(":delete")}
         onClose={() => setDeleteFor(null)}
         onConfirm={remove}
       />
@@ -268,8 +264,8 @@ export function Resources() {
 }
 
 function DeployDialog({ project, busy, onClose, onSubmit }) {
-  const [image, setImage] = useState('');
-  const [commit, setCommit] = useState('');
+  const [image, setImage] = useState("");
+  const [commit, setCommit] = useState("");
   if (!project) return null;
 
   const supportsImage = Boolean(project.image_env);
@@ -281,11 +277,11 @@ function DeployDialog({ project, busy, onClose, onSubmit }) {
       eyebrow="DESPLIEGUE"
       title={`Desplegar ${project.name}`}
       description={
-        project.kind === 'repository'
-          ? `Se traerá la última versión de ${project.branch || 'main'} y se reconstruirá la imagen.`
+        project.kind === "repository"
+          ? `Se traerá la última versión de ${project.branch || "main"} y se reconstruirá la imagen.`
           : supportsImage
-            ? 'Puedes fijar una imagen concreta; si el despliegue falla se restaura la anterior.'
-            : 'Se volverá a aplicar el Compose actual.'
+            ? "Puedes fijar una imagen concreta; si el despliegue falla se restaura la anterior."
+            : "Se volverá a aplicar el Compose actual."
       }
       footer={
         <>
@@ -328,11 +324,11 @@ function DeployDialog({ project, busy, onClose, onSubmit }) {
 }
 
 function DeleteDialog({ project, busy, onClose, onConfirm }) {
-  const [mode, setMode] = useState('stack');
-  const [confirmation, setConfirmation] = useState('');
+  const [mode, setMode] = useState("stack");
+  const [confirmation, setConfirmation] = useState("");
   if (!project) return null;
 
-  const needsConfirmation = mode === 'all';
+  const needsConfirmation = mode === "all";
   const canDelete = !needsConfirmation || confirmation === project.slug;
 
   return (
@@ -361,9 +357,9 @@ function DeleteDialog({ project, busy, onClose, onConfirm }) {
             value={mode}
             onChange={(event) => setMode(event.currentTarget.value)}
             options={[
-              { value: 'none', label: 'Solo desregistrar del panel' },
-              { value: 'stack', label: 'Desregistrar y detener los contenedores' },
-              { value: 'all', label: 'Borrar todo: contenedores, volúmenes y archivos' },
+              { value: "none", label: "Solo desregistrar del panel" },
+              { value: "stack", label: "Desregistrar y detener los contenedores" },
+              { value: "all", label: "Borrar todo: contenedores, volúmenes y archivos" },
             ]}
           />
         </Field>
