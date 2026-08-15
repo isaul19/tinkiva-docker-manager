@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.2.0 — 2026-08-15
+
+### Alta de recursos
+
+- Diálogo «Añadir recurso» con cuatro orígenes: base de datos, imagen de Docker Hub,
+  repositorio de GitHub y Compose ya existente.
+- Cinco motores de base de datos en lugar de solo PostgreSQL: **PostgreSQL, MySQL,
+  MariaDB, MongoDB y Redis**. Cada plantilla genera Compose con volumen persistente,
+  healthcheck, `mem_limit`, `no-new-privileges` y red interna; los puertos solo se
+  publican si se piden, y siempre contra `127.0.0.1`.
+- Autocompletado de Docker Hub: búsqueda de imágenes y listado de etiquetas, con
+  sugerencias populares mientras no se escribe nada.
+- Servicios desde una imagen suelta: el panel escribe el Compose y deja la imagen en
+  `APP_IMAGE`, de modo que el rollback funciona igual que en los proyectos Compose.
+
+### GitHub
+
+- Integración con GitHub App mediante el flujo de manifiesto de un clic: el panel te
+  lleva a GitHub, GitHub crea la App y devuelve las credenciales, y después eliges en
+  qué repositorios instalarla (todos o algunos).
+- Alta manual alternativa para quien ya tenga una App creada.
+- Recursos desde repositorio: clonado superficial, build de la imagen y redespliegue
+  automático en cada `push` a la rama elegida, validado con HMAC-SHA256.
+
+### Interfaz
+
+- Interfaz reescrita en **Preact** con esbuild; el código pasa de tres archivos sueltos
+  a componentes por vista. El bundle (115 KB, 43 KB gzip) se versiona en `web/dist/`,
+  así que `cargo build` sigue sin necesitar Node.
+- Iconografía con `lucide-preact` y logos de marca con `simple-icons`.
+- Rediseño completo: nueva escala tipográfica y de espaciado, navegación agrupada,
+  tarjetas de recurso, avisos flotantes, diálogos accesibles y diseño adaptable.
+- La pantalla de acceso, el pie del menú y la página Sistema indican que el panel está
+  construido con Rust y Preact.
+
+### Interno
+
+- Nuevos módulos sin dependencias externas: analizador JSON, SHA-256/HMAC/Base64URL,
+  cliente HTTPS sobre `curl` con lista blanca de hosts, y lanzador de subprocesos común.
+- Los secretos (tokens de GitHub, cabeceras de autorización) nunca viajan por `argv`:
+  van por stdin de `curl` o por un archivo de credenciales efímero de `git`.
+- Los archivos estáticos se sirven prestados desde `.rodata` en vez de copiarse por
+  petición, así el consumo no crece con el tráfico.
+- Formato de estado `TDM2` con tipo de recurso y origen; el formato `TDM1` anterior se
+  sigue leyendo y se migra al primer guardado.
+- Borrado de recursos con tres niveles: desregistrar, detener contenedores, o borrar
+  también volúmenes y archivos.
+- 44 pruebas unitarias (antes 8) y smoke test ampliado a los nuevos endpoints.
+
+### Requisitos nuevos
+
+- `curl` para Docker Hub y GitHub, `openssl` para firmar los JWT de la GitHub App y
+  `git` para clonar repositorios. Si falta alguno, el panel lo indica en Sistema y
+  desactiva solo esa función; el resto sigue funcionando igual.
+
 ## 0.1.5 — 2026-08-14
 
 - Carpeta de estado renombrada a `tinkiva-docker-manager/` (migración automática desde `tinkiva/`).
