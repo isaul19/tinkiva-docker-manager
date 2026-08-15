@@ -120,7 +120,7 @@ fn ask_token(reader: &mut io::StdinLock) -> Result<String, String> {
         println!("? Token administrador:");
         println!("    1) Generar automáticamente (recomendado)");
         println!("    2) Ingresar mi propio token (32–256 caracteres)");
-        let answer = read_line("  Selección [1]: ", reader)?;
+        let answer = read_line("  Selección [default: 1]: ", reader)?;
         match answer.as_str() {
             "" | "1" => {
                 let token = random_hex(24)
@@ -145,7 +145,7 @@ fn ask_path(
     default: &str,
 ) -> Result<String, String> {
     loop {
-        let answer = read_line(&format!("? {label} [\"{default}\"]: "), reader)?;
+        let answer = read_line(&format!("? {label} [default: {default}]: "), reader)?;
         if answer.is_empty() {
             return Ok(default.to_owned());
         }
@@ -158,7 +158,7 @@ fn ask_path(
 
 fn ask_port(reader: &mut io::StdinLock) -> Result<u16, String> {
     loop {
-        let answer = read_line(&format!("? Puerto [{}]: ", DEFAULT_PORT), reader)?;
+        let answer = read_line(&format!("? Puerto [default: {DEFAULT_PORT}]: "), reader)?;
         if answer.is_empty() {
             return Ok(DEFAULT_PORT);
         }

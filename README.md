@@ -90,10 +90,10 @@ Si ejecutas el binario sin `TDM_ADMIN_TOKEN`, sin variables de entorno y sin arc
 ? Token administrador:
     1) Generar automáticamente (recomendado)
     2) Ingresar mi propio token (32–256 caracteres)
-  Selección [1]:
-? Directorio de datos ["./tinkiva/data"]:
-? Raíz permitida para apps Compose ["./tinkiva/apps"]:
-? Puerto [8787]:
+  Selección [default: 1]:
+? Directorio de datos (estado local) [default: ./tinkiva/data]:
+? Raíz permitida para apps Compose [default: ./tinkiva/apps]:
+? Puerto [default: 8787]:
 ```
 
 Enter acepta el valor por defecto. Al terminar, el asistente escribe `tinkiva.env` (permisos `0600`) con `TDM_BIND`, `TDM_ADMIN_TOKEN`, `TDM_DATA_DIR` y `TDM_ALLOWED_ROOT`, muestra el token una sola vez y arranca el servidor. En los siguientes arranques el archivo se lee automáticamente; las variables de entorno tienen prioridad sobre él. La ruta del archivo puede cambiarse con `TDM_CONFIG_FILE`. En modo no interactivo (sin stdin, p. ej. systemd sin `EnvironmentFile`) el asistente se omite y se exige `TDM_ADMIN_TOKEN`.
