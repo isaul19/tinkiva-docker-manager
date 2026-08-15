@@ -199,3 +199,33 @@ pub fn status() -> Result<(), String> {
         }
     }
 }
+
+pub fn logs(follow: bool, lines: usize) -> Result<(), String> {
+    let path = log_file();
+    if !path.exists() {
+        println!("Aún no existe el log ({})", path.display());
+        return Ok(());
+    }
+
+    let tail = Command::new("tail")
+        .args(["-n", &lines.to_string()])
+        .arg(&path)
+        .status()
+        .map_err(|error| format!("no se pudo ejecutar tail: {error}"))?;
+    if !tail.success() {
+        return Err("tail terminó con error".to_owned());
+    }
+
+    if follow {
+        println!("— siguiendo {} (Ctrl+C para salir) —", path.display());
+        let follow_status = Command::new("tail")
+            .args(["-n", "0", "-f"])
+            .arg(&path)
+            .status()
+            .map_err(|error| format!("no se pudo ejecutar tail: {error}"))?;
+        if !follow_status.success() {
+            return Err("tail -f terminó con error".to_owned());
+        }
+    }
+    Ok(())
+}

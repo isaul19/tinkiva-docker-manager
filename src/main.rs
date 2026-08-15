@@ -19,6 +19,24 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
+const HELP: &str = "\
+Tinkiva Docker Manager — panel de despliegue Docker de un solo nodo
+
+Uso: tinkivadm [comando]
+
+Comandos:
+  start            Arranca el panel en segundo plano (asistente si no hay config)
+  stop             Detiene la instancia en segundo plano
+  status           Muestra si el panel está en ejecución, pid y URL
+  logs [N] [-f]    Muestra las últimas N líneas del log (default 50); -f lo sigue en vivo
+  config           Reejecuta el asistente de configuración
+  update [versión] Descarga una release de GitHub (verifica sha256) y se reemplaza
+  version          Imprime la versión actual
+  help             Muestra esta ayuda
+
+Sin comando abre el menú interactivo (o el asistente la primera vez).
+El estado local vive en ./tinkiva/ — config, pid, log, datos y apps.";
+
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let first = arguments.first();
@@ -27,14 +45,28 @@ fn main() {
         Some("start") => run_start(),
         Some("stop") => daemon::stop(),
         Some("status") => daemon::status(),
+        Some("logs") => daemon::logs(
+            arguments.iter().skip(1).any(|argument| argument == "-f" || argument == "--follow"),
+            arguments
+                .iter()
+                .skip(1)
+                .find(|argument| argument.parse::<usize>().is_ok())
+                .and_then(|argument| argument.parse::<usize>().ok())
+                .filter(|lines| *lines > 0)
+                .unwrap_or(50),
+        ),
         Some("update") => setup::run_self_update(arguments.get(1).map(String::as_str)),
         Some("config") => setup::run_wizard(setup::read_config_file().as_ref()),
+        Some("help") | Some("--help") | Some("-h") => {
+            println!("{HELP}");
+            Ok(())
+        }
         Some("version") | Some("--version") | Some("-V") => {
-            println!("tinkiva-docker-manager {}", env!("CARGO_PKG_VERSION"));
+            println!("tinkivadm {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some(other) => Err(format!(
-            "comando desconocido: {other}. Comandos: start, stop, status, update [versión], config, version."
+            "comando desconocido: {other}. Ejecuta tinkivadm help para ver los comandos."
         )),
         None => run(),
     };

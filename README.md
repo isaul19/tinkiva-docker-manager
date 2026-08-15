@@ -135,9 +135,11 @@ Si ya existe configuración, ejecutar `tinkivadm` a secas muestra un menú: inic
 | `tinkivadm start` | Arranca el panel en segundo plano (asistente si no hay config). Logs en `tinkiva/tinkiva.log`. |
 | `tinkivadm stop` | Detiene la instancia en segundo plano (SIGTERM; fuerza `-9` si no baja). |
 | `tinkivadm status` | Muestra si está en ejecución, el pid y la URL del panel. |
+| `tinkivadm logs [N] [-f]` | Últimas N líneas del log (default 50); `-f` lo sigue en vivo. |
 | `tinkivadm config` | Reejecuta el asistente; tus valores actuales se ofrecen como default. |
 | `tinkivadm update [versión]` | Descarga una release de GitHub, verifica sha256 y se reemplaza. |
 | `tinkivadm version` | Imprime la versión actual. |
+| `tinkivadm help` | Muestra todos los comandos. |
 
 Sin systemd, el binario gestiona su propio demonio. Todo vive dentro de `tinkiva/` en el directorio donde lo ejecutes: `tinkiva/tinkiva.env` (config), `tinkiva/tinkiva.pid` (proceso) y `tinkiva/tinkiva.log` (salida), junto a `tinkiva/data` y `tinkiva/apps`.
 
