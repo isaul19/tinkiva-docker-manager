@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { Container, FileText, Play, RotateCw, Square } from 'lucide-preact';
+import { Container, FileTerminal, FileText, Play, RotateCw, Square } from 'lucide-preact';
 import { api } from '../lib/api.js';
 import { useApp } from '../lib/context.js';
 import { useAsync, usePolling } from '../lib/hooks.js';
@@ -16,14 +16,48 @@ import {
 } from '../ui/Primitives.jsx';
 import { useToast } from '../ui/Toast.jsx';
 import { LogsDialog } from './LogsDialog.jsx';
+import { Field, Input } from '../ui/Form.jsx';
+import { Modal } from '../ui/Modal.jsx';
 
 const PAGE_SIZE = 10;
+
+const STATE_LABELS = {
+  created: 'Creado',
+  restarting: 'Reiniciando',
+  running: 'En ejecución',
+  removing: 'Eliminando',
+  paused: 'Pausado',
+  exited: 'Finalizado',
+  dead: 'Inactivo',
+};
+
+function containerStateLabel(state) {
+  return STATE_LABELS[String(state).toLowerCase()] || state || 'Desconocido';
+}
+
+function containerStatusLabel(status) {
+  let value = String(status || '');
+  value = value.replace(/^Up\s+/i, 'En ejecución desde hace ');
+  value = value.replace(/^Exited/i, 'Finalizado').replace(/^Created/i, 'Creado');
+  value = value.replace(/\(healthy\)/ig, '(saludable)').replace(/\(unhealthy\)/ig, '(no saludable)');
+  value = value.replace(/About an hour ago/ig, 'hace cerca de una hora');
+  value = value.replace(/(\d+)\s+(minute|hour|day|week)s?\s+ago/ig, (_, count, unit) => {
+    const units = { minute: 'minuto', hour: 'hora', day: 'día', week: 'semana' };
+    return `hace ${count} ${units[unit.toLowerCase()]}${count === '1' ? '' : 's'}`;
+  });
+  value = value.replace(/(\d+)\s+(minute|hour|day|week)s?(?=\s|$|\()/ig, (_, count, unit) => {
+    const units = { minute: 'minuto', hour: 'hora', day: 'día', week: 'semana' };
+    return `${count} ${units[unit.toLowerCase()]}${count === '1' ? '' : 's'}`;
+  });
+  return value || 'Sin información';
+}
 
 export function Containers() {
   const { refreshToken, openAddResource } = useApp();
   const toast = useToast();
   const [busy, setBusy] = useState(null);
   const [logsFor, setLogsFor] = useState(null);
+  const [consoleFor, setConsoleFor] = useState(null);
   const [page, setPage] = useState(0);
 
   const containers = useAsync(() => api.get('/api/containers'), [refreshToken]);
@@ -95,8 +129,8 @@ export function Containers() {
                           </div>
                         </td>
                         <td>
-                          <Badge tone={stateTone(container.state)}>{container.state}</Badge>
-                          <span class="muted block">{container.status}</span>
+                          <Badge tone={stateTone(container.state)}>{containerStateLabel(container.state)}</Badge>
+                          <span class="muted block">{containerStatusLabel(container.status)}</span>
                         </td>
                         <td class="numeric">
                           {container.cpu || '—'}
@@ -117,6 +151,7 @@ export function Containers() {
                             />
                             {running ? (
                               <>
+                                <Button size="sm" icon={FileTerminal} onClick={() => setConsoleFor(container)} title="Abrir consola" />
                                 <Button
                                   size="sm"
                                   icon={RotateCw}
@@ -162,6 +197,42 @@ export function Containers() {
         target={logsFor}
         title={logsFor}
       />
+      <ConsoleDialog container={consoleFor} onClose={() => setConsoleFor(null)} />
     </>
   );
+}
+
+function ConsoleDialog({ container, onClose }) {
+  const [command, setCommand] = useState('');
+  const [output, setOutput] = useState('');
+  const [busy, setBusy] = useState(false);
+  if (!container) return null;
+
+  const execute = async (event) => {
+    event.preventDefault();
+    if (!command.trim()) return;
+    const submitted = command;
+    setBusy(true);
+    try {
+      const result = await api.post(`/api/containers/${encodeURIComponent(container.name)}/console`, { command: submitted });
+      setOutput((current) => `${current}${current ? '\n' : ''}$ ${submitted}\n${result.output || '(sin salida)'}\n`);
+      setCommand('');
+    } catch (error) {
+      setOutput((current) => `${current}${current ? '\n' : ''}$ ${submitted}\nError: ${error.message}\n`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <Modal open onClose={onClose} eyebrow="CONSOLA" title={container.name} description="Ejecuta comandos dentro de este contenedor. No da acceso a la terminal del host." size="lg" footer={<>
+    <Button onClick={onClose}>Cerrar</Button>
+    <Button variant="primary" type="submit" form="container-console" loading={busy}>Ejecutar</Button>
+  </>}>
+    <form id="container-console" onSubmit={execute}>
+      <Field label="Comando" hint="Se ejecuta con sh -lc dentro del contenedor; máximo 4096 caracteres.">
+        <Input value={command} onInput={(event) => setCommand(event.currentTarget.value)} placeholder="ls -la /" autofocus />
+      </Field>
+    </form>
+    <pre class="logs console-output" tabIndex={0}>{output || 'La salida de los comandos aparecerá aquí.'}</pre>
+  </Modal>;
 }

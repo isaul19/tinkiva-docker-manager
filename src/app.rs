@@ -300,6 +300,9 @@ impl App {
             ("GET", ["api", "containers", container, "logs"]) => {
                 self.container_logs(container, request)
             }
+            ("POST", ["api", "containers", container, "console"]) => {
+                self.container_console(container, request)
+            }
             ("POST", ["api", "containers", container, action]) => {
                 self.container_action(container, action)
             }
@@ -708,6 +711,36 @@ impl App {
         match self.docker.compose_logs(&project, tail) {
             Ok(logs) => Response::text(200, logs),
             Err(error) => json_error(502, &error),
+        }
+    }
+
+    /// Ejecuta un comando no interactivo dentro de un contenedor en ejecución.
+    /// La consola web nunca ejecuta comandos en el host.
+    fn container_console(&self, container: &str, request: &Request) -> Response {
+        let fields = match request.form() {
+            Ok(fields) => fields,
+            Err(error) => return json_error(400, &error),
+        };
+        let command = fields.get("command").map_or("", String::as_str);
+        match self.docker.container_exec(container, command) {
+            Ok(result) => {
+                let mut output = result.stdout;
+                if !result.stderr.trim().is_empty() {
+                    if !output.is_empty() && !output.ends_with('\n') {
+                        output.push('\n');
+                    }
+                    output.push_str(&result.stderr);
+                }
+                Response::json(
+                    200,
+                    format!(
+                        "{{\"ok\":{},\"output\":{}}}",
+                        result.success,
+                        json_string(&output)
+                    ),
+                )
+            }
+            Err(error) => json_error(400, &error),
         }
     }
 

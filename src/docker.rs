@@ -267,6 +267,21 @@ impl DockerClient {
         Ok(truncate_text(&output, 2 * 1024 * 1024))
     }
 
+    /// Ejecuta un comando de consola dentro del contenedor, nunca en el host.
+    pub fn container_exec(&self, container: &str, command: &str) -> Result<CommandResult, String> {
+        if !valid_container_ref(container) {
+            return Err("identificador de contenedor inválido".to_owned());
+        }
+        if command.trim().is_empty() || command.len() > 4096 || command.contains('\0') {
+            return Err("comando inválido o demasiado largo".to_owned());
+        }
+        self.run(
+            ["exec", container, "sh", "-lc", command],
+            None,
+            Duration::from_secs(60),
+        )
+    }
+
     pub fn compose_logs(&self, project: &Project, tail: usize) -> Result<String, String> {
         let tail = tail.clamp(10, 2000).to_string();
         let compose = project.compose_file.to_string_lossy().into_owned();
