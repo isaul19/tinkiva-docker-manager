@@ -315,7 +315,7 @@ pub fn collect_processes() -> Result<Vec<ProcessEntry>, String> {
                 state: snapshot.state,
                 cpu_percent: (100.0 * delta / (CLOCK_TICKS_PER_SECOND * elapsed)).max(0.0),
                 memory_bytes: other.memory_bytes,
-                command: other.command,
+                command: other.command.clone(),
             })
         })
         .collect();
