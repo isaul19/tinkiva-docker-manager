@@ -72,20 +72,50 @@ Hay dos rutas; ambas terminan con el binario `tinkivadm` listo para usar. Si sol
 
 ### Opción A — Descargar el binario (recomendado)
 
-Los binarios publicados en GitHub Releases son estáticos (musl): funcionan en Ubuntu, Debian y Amazon Linux, en `x86_64` y `arm64`, sin dependencias. En el servidor ejecuta:
+Los binarios publicados en GitHub Releases son estáticos (musl): funcionan en Ubuntu, Debian y Amazon Linux, en `x86_64` y `arm64`, sin dependencias.
+
+**1. Identifica la arquitectura de tu servidor:**
 
 ```bash
-# 1. Descarga la última versión (cambia amd64 por arm64 en una EC2 Graviton/t4g)
-curl --fail --location -O \
-  https://github.com/isaul19/tinkiva-docker-manager/releases/latest/download/tinkiva-docker-manager-linux-amd64
-curl --fail --location -O \
-  https://github.com/isaul19/tinkiva-docker-manager/releases/latest/download/tinkiva-docker-manager-linux-amd64.sha256
+uname -m
+```
 
-# 2. Verifica la suma y ubica el binario como tinkivadm
-sha256sum -c tinkiva-docker-manager-linux-amd64.sha256
-sudo install -m 0755 tinkiva-docker-manager-linux-amd64 /usr/local/bin/tinkivadm
+- `x86_64` → usa `amd64` (la mayoría de EC2 t2/t3, Intel/AMD)
+- `aarch64` → usa `arm64` (EC2 Graviton: t4g, a1, c6g)
 
-# 3. Primera ejecución: abre el asistente y arranca el panel
+**2. Descarga y verifica la última versión** (reemplaza `amd64` por `arm64` si aplica):
+
+```bash
+ARCH=amd64
+curl --fail --location -O \
+  "https://github.com/isaul19/tinkiva-docker-manager/releases/latest/download/tinkiva-docker-manager-linux-${ARCH}"
+curl --fail --location -O \
+  "https://github.com/isaul19/tinkiva-docker-manager/releases/latest/download/tinkiva-docker-manager-linux-${ARCH}.sha256"
+sha256sum -c "tinkiva-docker-manager-linux-${ARCH}.sha256"
+```
+
+**3. Instala el binario como `tinkivadm`:**
+
+```bash
+sudo install -m 0755 "tinkiva-docker-manager-linux-${ARCH}" /usr/local/bin/tinkivadm
+```
+
+**4. Primera ejecución: abre el asistente y arranca el panel:**
+
+```bash
+tinkivadm start
+```
+
+Alternativa automática sin elegir a mano (detecta la arquitectura sola):
+
+```bash
+ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+curl --fail --location -O \
+  "https://github.com/isaul19/tinkiva-docker-manager/releases/latest/download/tinkiva-docker-manager-linux-${ARCH}.sha256"
+curl --fail --location -O \
+  "https://github.com/isaul19/tinkiva-docker-manager/releases/latest/download/tinkiva-docker-manager-linux-${ARCH}"
+sha256sum -c "tinkiva-docker-manager-linux-${ARCH}.sha256" \
+  && sudo install -m 0755 "tinkiva-docker-manager-linux-${ARCH}" /usr/local/bin/tinkivadm
 tinkivadm start
 ```
 
