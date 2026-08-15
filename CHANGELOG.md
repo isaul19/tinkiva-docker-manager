@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.1 — 2026-08-15
+
+- Memoria del host: `usada` y `disponible` ahora derivan ambas de `MemAvailable`
+  (`usada = total − disponible`), de modo que las cifras del Resumen siempre suman
+  el total. Antes la usada se calculaba con una fórmula propia y la disponible con
+  otra, y podían contradecirse.
+
 ## 0.8.0 — 2026-08-15
 
 ### Editor de variables de entorno
