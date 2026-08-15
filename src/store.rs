@@ -125,6 +125,17 @@ impl Store {
             .collect())
     }
 
+    /// Último despliegue registrado de un proyecto, exitoso o no.
+    pub fn last_deployment(&self, project: &str) -> Result<Option<Deployment>, String> {
+        let state = self.lock()?;
+        Ok(state
+            .deployments
+            .iter()
+            .rev()
+            .find(|deployment| deployment.project == project)
+            .cloned())
+    }
+
     pub fn rollback_target(&self, project: &str) -> Result<Option<String>, String> {
         let state = self.lock()?;
         Ok(state

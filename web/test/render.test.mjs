@@ -124,6 +124,7 @@ const API = {
       runtime_status: 'running',
       can_rollback: false,
       rollback_reason: 'Este recurso no usa una imagen configurable mediante archivo .env.',
+      last_deployment: { created_at: 1_700_000_300, status: 'success' },
     },
     {
       slug: 'storagia-api',
@@ -142,6 +143,7 @@ const API = {
       runtime_status: 'stopped',
       can_rollback: true,
       rollback_reason: '',
+      last_deployment: { created_at: 1_700_000_200, status: 'failed' },
     },
   ],
   '/api/history': [
@@ -326,6 +328,8 @@ test('la vista de recursos distingue base de datos y repositorio', async () => {
   assert.match(text, /Corriendo/);
   assert.match(text, /Apagado/);
   assert.match(text, /Rollback no disponible/);
+  assert.match(text, /Último despliegue/);
+  assert.match(text, /falló/);
 });
 
 test('la vista de despliegues formatea duración y estado', async () => {

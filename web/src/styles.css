@@ -1106,7 +1106,7 @@ code {
 
 .resource-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
   gap: 1.1rem;
 }
 
@@ -1177,9 +1177,13 @@ code {
 
 .resource-meta dd {
   margin: 0;
-  max-width: 24ch;
+  max-width: 40ch;
   font-size: 0.79rem;
   text-align: right;
+}
+
+.resource-meta .danger-text {
+  color: var(--danger);
 }
 
 .resource-webhook summary {

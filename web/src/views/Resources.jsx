@@ -173,6 +173,21 @@ export function Resources() {
                     <dt>Creado</dt>
                     <dd>{formatRelative(project.created_at)}</dd>
                   </div>
+                  <div>
+                    <dt>Último despliegue</dt>
+                    <dd>
+                      {project.last_deployment ? (
+                        <>
+                          {formatRelative(project.last_deployment.created_at)}
+                          {project.last_deployment.status !== 'success' ? (
+                            <span class="danger-text"> · falló</span>
+                          ) : null}
+                        </>
+                      ) : (
+                        'Todavía no'
+                      )}
+                    </dd>
+                  </div>
                 </dl>
 
                 <details class="resource-webhook">

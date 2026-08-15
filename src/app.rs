@@ -510,13 +510,32 @@ impl App {
                             } else {
                                 ""
                             };
+                            let last_deployment = self
+                                .store
+                                .last_deployment(&project.slug)
+                                .ok()
+                                .flatten()
+                                .map_or_else(
+                                    || "null".to_owned(),
+                                    |deployment| {
+                                        format!(
+                                            "{{\"created_at\":{},\"status\":{}}}",
+                                            deployment.created_at,
+                                            json_string(&deployment.status)
+                                        )
+                                    },
+                                );
                             let project_json = project.to_json(true);
                             format!(
-                                "{},\"runtime_status\":{},\"can_rollback\":{},\"rollback_reason\":{}}}",
+                                concat!(
+                                    "{},\"runtime_status\":{},\"can_rollback\":{},",
+                                    "\"rollback_reason\":{},\"last_deployment\":{}}}"
+                                ),
                                 project_json.trim_end_matches('}'),
                                 json_string(runtime_status),
                                 can_rollback,
                                 json_string(rollback_reason),
+                                last_deployment,
                             )
                         })
                         .collect::<Vec<_>>()
