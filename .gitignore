@@ -7,4 +7,6 @@
 .env
 tinkiva.env
 /tinkiva/
+tinkiva.pid
+tinkiva.log
 state.db

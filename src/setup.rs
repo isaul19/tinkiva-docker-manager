@@ -13,7 +13,8 @@ const DEFAULT_PORT: u16 = 8787;
 const DEFAULT_UPDATE_REPO: &str = "isaul19/tinkiva-docker-manager";
 
 pub enum MenuChoice {
-    Start,
+    StartBackground,
+    StartForeground,
     Reconfigure,
     Update,
     Exit,
@@ -78,18 +79,20 @@ pub fn show_menu() -> Result<MenuChoice, String> {
     println!("Se encontró configuración previa en {}.", config_path().display());
     println!();
     println!("? ¿Qué deseas hacer?");
-    println!("    1) Iniciar el panel");
-    println!("    2) Volver a configurar");
-    println!("    3) Buscar e instalar actualizaciones");
-    println!("    4) Salir");
+    println!("    1) Iniciar el panel en segundo plano");
+    println!("    2) Iniciar el panel en primer plano");
+    println!("    3) Volver a configurar");
+    println!("    4) Buscar e instalar actualizaciones");
+    println!("    5) Salir");
 
     loop {
         let answer = read_line("  Selección [default: 1]: ", &mut reader)?;
         match answer.as_str() {
-            "" | "1" => return Ok(MenuChoice::Start),
-            "2" => return Ok(MenuChoice::Reconfigure),
-            "3" => return Ok(MenuChoice::Update),
-            "4" => return Ok(MenuChoice::Exit),
+            "" | "1" => return Ok(MenuChoice::StartBackground),
+            "2" => return Ok(MenuChoice::StartForeground),
+            "3" => return Ok(MenuChoice::Reconfigure),
+            "4" => return Ok(MenuChoice::Update),
+            "5" => return Ok(MenuChoice::Exit),
             other => println!("  ✗ Opción no válida: {other}"),
         }
     }

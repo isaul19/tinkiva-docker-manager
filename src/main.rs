@@ -4,6 +4,7 @@
 compile_error!("Tinkiva Docker Manager solo soporta Linux porque utiliza /proc, df y Docker.");
 
 mod app;
+mod daemon;
 mod docker;
 mod http;
 mod metrics;
@@ -20,17 +21,20 @@ use std::thread;
 
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    let outcome = match arguments.first().map(String::as_str) {
+    let first = arguments.first();
+    let outcome = match first.map(String::as_str) {
+        Some("__serve") => serve_with_pidfile(),
+        Some("start") => run_start(),
+        Some("stop") => daemon::stop(),
+        Some("status") => daemon::status(),
         Some("update") => setup::run_self_update(arguments.get(1).map(String::as_str)),
-        Some("config") => {
-            setup::run_wizard(setup::read_config_file().as_ref())
-        }
+        Some("config") => setup::run_wizard(setup::read_config_file().as_ref()),
         Some("version") | Some("--version") | Some("-V") => {
             println!("tinkiva-docker-manager {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some(other) => Err(format!(
-            "comando desconocido: {other}. Comandos: update [versión], config, version."
+            "comando desconocido: {other}. Comandos: start, stop, status, update [versión], config, version."
         )),
         None => run(),
     };
@@ -40,8 +44,36 @@ fn main() {
     }
 }
 
+fn run_start() -> Result<(), String> {
+    if std::env::var("TDM_ADMIN_TOKEN").is_err() && !setup::config_exists() {
+        if setup::stdin_is_interactive() {
+            setup::run_wizard(None)?;
+        } else {
+            return Err(
+                "TDM_ADMIN_TOKEN es obligatorio. Ejecuta el binario en una terminal para el asistente inicial."
+                    .to_owned(),
+            );
+        }
+    }
+    daemon::start()
+}
+
+fn serve_with_pidfile() -> Result<(), String> {
+    daemon::write_pid()
+        .map_err(|error| format!("no se pudo escribir el archivo pid: {error}"))?;
+    let outcome = Config::load().and_then(serve);
+    if outcome.is_err() {
+        daemon::clear_pid();
+    }
+    outcome
+}
+
 fn run() -> Result<(), String> {
     let config = resolve_config()?;
+    serve(config)
+}
+
+fn serve(config: Config) -> Result<(), String> {
     let bind = config.bind.clone();
     let workers = config.workers;
     let app = Arc::new(App::new(config)?);
@@ -102,7 +134,11 @@ fn resolve_config() -> Result<Config, String> {
 
     if interactive {
         match setup::show_menu()? {
-            setup::MenuChoice::Start => {}
+            setup::MenuChoice::StartBackground => {
+                daemon::start()?;
+                std::process::exit(0);
+            }
+            setup::MenuChoice::StartForeground => {}
             setup::MenuChoice::Reconfigure => {
                 let current = setup::read_config_file();
                 setup::run_wizard(current.as_ref())?;

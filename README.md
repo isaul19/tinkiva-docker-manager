@@ -403,7 +403,19 @@ sudo systemctl restart tinkiva-docker-manager
 
 El repositorio de origen se puede cambiar con `TDM_UPDATE_REPO` (predeterminado: `isaul19/tinkiva-docker-manager`). Otros comandos: `config` reejecuta el asistente y `version` imprime la versión actual.
 
-Cuando el binario se ejecuta de forma interactiva y ya existe configuración (`tinkiva.env` o `/etc/tinkiva-docker-manager/env`), ofrece un menú: iniciar / volver a configurar / actualizar / salir. El servicio systemd no se ve afectado porque no usa terminal y recibe las variables por `EnvironmentFile`.
+Cuando el binario se ejecuta de forma interactiva y ya existe configuración (`tinkiva.env` o `/etc/tinkiva-docker-manager/env`), ofrece un menú: iniciar en segundo plano / iniciar en primer plano / volver a configurar / actualizar / salir. El servicio systemd no se ve afectado porque no usa terminal y recibe las variables por `EnvironmentFile`.
+
+## Ejecutar en segundo plano
+
+Sin systemd, el propio binario gestiona un proceso demonio con PID file y log junto a la configuración (`tinkiva.pid`, `tinkiva.log`):
+
+```bash
+tinkiva-docker-manager start    # arranca detached (setsid), logs en tinkiva.log
+tinkiva-docker-manager status   # muestra pid y URL del panel
+tinkiva-docker-manager stop     # SIGTERM y limpieza del pid (fuerza -9 si no baja)
+```
+
+Si no existe configuración, `start` abre primero el asistente interactivo. Un solo comando ejecuta la instancia: `tinkiva-docker-manager` a secas sigue siendo el modo primer plano.
 
 ## Desinstalar
 
