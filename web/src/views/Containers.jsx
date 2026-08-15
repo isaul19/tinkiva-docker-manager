@@ -10,17 +10,21 @@ import {
   Button,
   EmptyState,
   Meter,
+  Pagination,
   Panel,
   stateTone,
 } from '../ui/Primitives.jsx';
 import { useToast } from '../ui/Toast.jsx';
 import { LogsDialog } from './LogsDialog.jsx';
 
+const PAGE_SIZE = 10;
+
 export function Containers() {
   const { refreshToken, openAddResource } = useApp();
   const toast = useToast();
   const [busy, setBusy] = useState(null);
   const [logsFor, setLogsFor] = useState(null);
+  const [page, setPage] = useState(0);
 
   const containers = useAsync(() => api.get('/api/containers'), [refreshToken]);
   usePolling(containers.reload, 10_000);
@@ -60,9 +64,13 @@ export function Containers() {
             />
           }
         >
-          {(list) => (
-            <div class="table-scroll">
-              <table class="data-table">
+          {(list) => {
+            const lastPage = Math.max(0, Math.ceil(list.length / PAGE_SIZE) - 1);
+            const currentPage = Math.min(page, lastPage);
+            const visible = list.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+            return <>
+              <div class="table-scroll">
+                <table class="data-table">
                 <thead>
                   <tr>
                     <th>Contenedor</th>
@@ -74,7 +82,7 @@ export function Containers() {
                   </tr>
                 </thead>
                 <tbody>
-                  {list.map((container) => {
+                  {visible.map((container) => {
                     const running = String(container.state).toLowerCase().includes('running');
                     const cpu = parsePercent(container.cpu);
                     const memory = parsePercent(container.memory_percent);
@@ -139,9 +147,11 @@ export function Containers() {
                     );
                   })}
                 </tbody>
-              </table>
-            </div>
-          )}
+                </table>
+              </div>
+              <Pagination page={currentPage} total={list.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
+            </>;
+          }}
         </AsyncBlock>
       </Panel>
 

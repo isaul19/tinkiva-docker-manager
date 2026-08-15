@@ -1,15 +1,17 @@
 import { useState } from "preact/hooks";
-import { Boxes, FileText, Github, Layers, Rocket, Trash2, Undo2, Webhook } from "lucide-preact";
+import { Boxes, FileText, Github, Layers, Rocket, Settings2, Trash2, Undo2, Webhook } from "lucide-preact";
 import { api } from "../lib/api.js";
 import { useApp } from "../lib/context.js";
 import { useAsync, usePolling } from "../lib/hooks.js";
 import { formatRelative } from "../lib/format.js";
 import { BrandIcon, hasBrand } from "../ui/BrandIcon.jsx";
-import { AsyncBlock, Badge, Button, EmptyState, Panel } from "../ui/Primitives.jsx";
-import { CopyValue, Field, FormGrid, Input, Select } from "../ui/Form.jsx";
+import { AsyncBlock, Badge, Button, EmptyState, Pagination, Panel } from "../ui/Primitives.jsx";
+import { CopyValue, Field, FormGrid, Input, Select, TextArea } from "../ui/Form.jsx";
 import { Modal } from "../ui/Modal.jsx";
 import { useToast } from "../ui/Toast.jsx";
 import { LogsDialog } from "./LogsDialog.jsx";
+
+const PAGE_SIZE = 10;
 
 const KIND_LABEL = {
   database: "Base de datos",
@@ -41,6 +43,8 @@ export function Resources() {
   const [logsFor, setLogsFor] = useState(null);
   const [deployFor, setDeployFor] = useState(null);
   const [deleteFor, setDeleteFor] = useState(null);
+  const [envFor, setEnvFor] = useState(null);
+  const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(null);
 
   const projects = useAsync(() => api.get("/api/projects"), [refreshToken]);
@@ -73,6 +77,23 @@ export function Resources() {
     } finally {
       setBusy(null);
     }
+  };
+
+  const openEnvironment = async (project) => {
+    setBusy(`${project.slug}:environment-read`);
+    try {
+      const result = await api.get(`/api/projects/${project.slug}/environment`);
+      setEnvFor({ project, environment: result.environment || "", managedKeys: result.managed_keys || [] });
+    } catch (error) { toast.error(error); } finally { setBusy(null); }
+  };
+
+  const saveEnvironment = async (project, environment) => {
+    setBusy(`${project.slug}:environment`);
+    try {
+      const result = await api.post(`/api/projects/${project.slug}/environment`, { environment });
+      toast.success(result.message || "Variables actualizadas.");
+      setEnvFor(null); projects.reload(); refresh();
+    } catch (error) { toast.error(error); } finally { setBusy(null); }
   };
 
   const remove = async (project, mode) => {
@@ -122,9 +143,13 @@ export function Resources() {
           </Panel>
         }
       >
-        {(list) => (
-          <div class="resource-grid">
-            {list.map((project) => (
+        {(list) => {
+          const lastPage = Math.max(0, Math.ceil(list.length / PAGE_SIZE) - 1);
+          const currentPage = Math.min(page, lastPage);
+          const visible = list.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+          return <>
+            <div class="resource-grid">
+              {visible.map((project) => (
               <article class="resource-card" key={project.slug}>
                 <header>
                   <div class="resource-icon">
@@ -209,9 +234,8 @@ export function Resources() {
                   >
                     {project.runtime_status === "running" ? "Redesplegar" : "Desplegar"}
                   </Button>
-                  <Button size="sm" icon={FileText} onClick={() => setLogsFor(project)}>
-                    Logs
-                  </Button>
+                  <Button size="sm" icon={FileText} onClick={() => setLogsFor(project)}>Logs</Button>
+                  <Button size="sm" icon={Settings2} loading={busy === `${project.slug}:environment-read`} disabled={!project.env_file} onClick={() => openEnvironment(project)} title={project.env_file ? "Editar variables de entorno" : "Este recurso no tiene .env gestionado"}>Variables</Button>
                   <Button
                     size="sm"
                     icon={Undo2}
@@ -233,9 +257,11 @@ export function Resources() {
                   />
                 </footer>
               </article>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+            <Pagination page={currentPage} total={list.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
+          </>;
+        }}
       </AsyncBlock>
 
       <LogsDialog
@@ -252,6 +278,10 @@ export function Resources() {
         onClose={() => setDeployFor(null)}
         onSubmit={deploy}
       />
+
+      {envFor ? (
+        <EnvironmentDialog state={envFor} busy={busy?.endsWith(":environment")} onClose={() => setEnvFor(null)} onSubmit={saveEnvironment} />
+      ) : null}
 
       <DeleteDialog
         project={deleteFor}
@@ -321,6 +351,27 @@ function DeployDialog({ project, busy, onClose, onSubmit }) {
       </FormGrid>
     </Modal>
   );
+}
+
+function EnvironmentDialog({ state, busy, onClose, onSubmit }) {
+  const [environment, setEnvironment] = useState(state?.environment || "");
+  if (!state) return null;
+  const { project, managedKeys = [] } = state;
+  return <Modal open onClose={onClose} eyebrow="CONFIGURACI├ôN" title={`Variables de ${project.name}`} description="Edita el archivo .env del recurso. Al guardar, Docker recrear├í el servicio solo si la configuraci├│n cambi├│." footer={<>
+    <Button onClick={onClose}>Cancelar</Button>
+    <Button variant="primary" loading={busy} onClick={() => onSubmit(project, environment)}>Guardar y aplicar</Button>
+  </>}>
+    <FormGrid columns={1}>
+      <Field label="Variables de entorno" hint="Una por l├¡nea, CLAVE=valor. Para borrar una variable, elimina su l├¡nea." wide>
+        <TextArea rows={10} spellcheck={false} placeholder={'NODE_ENV=production\nPORT=3000'} value={environment} onInput={(event) => setEnvironment(event.currentTarget.value)} />
+      </Field>
+      <div class="environment-note">
+        <span>El archivo se mantiene con permisos 0600 y los valores no se escriben en el historial.</span>
+        {managedKeys.length ? <span>Gestionadas por Tinkiva y ocultas aqu├¡: <code>{managedKeys.join(", ")}</code>.</span> : null}
+        {project.kind === "database" ? <span>En bases de datos, cambiar credenciales no modifica usuarios ya creados dentro de un volumen existente.</span> : null}
+      </div>
+    </FormGrid>
+  </Modal>;
 }
 
 function DeleteDialog({ project, busy, onClose, onConfirm }) {

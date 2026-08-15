@@ -97,6 +97,24 @@ export function AsyncBlock({ query, empty, children }) {
   return children(query.data);
 }
 
+export function Pagination({ page = 0, total = 0, pageSize = 10, onPageChange }) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const current = Math.min(Math.max(0, page), pages - 1);
+  const start = total ? current * pageSize + 1 : 0;
+  const end = Math.min(total, (current + 1) * pageSize);
+  if (total <= pageSize) return null;
+  return (
+    <div class="pagination" aria-label="Paginaci├│n">
+      <span class="muted small">{start}ÔÇô{end} de {total}</span>
+      <div class="pagination-actions">
+        <Button size="sm" disabled={current === 0} onClick={() => onPageChange?.(current - 1)}>Anterior</Button>
+        <span class="pagination-page">{current + 1} / {pages}</span>
+        <Button size="sm" disabled={current >= pages - 1} onClick={() => onPageChange?.(current + 1)}>Siguiente</Button>
+      </div>
+    </div>
+  );
+}
+
 export function Meter({ value, tone = 'accent' }) {
   const clamped = Math.max(0, Math.min(100, Number(value) || 0));
   return (

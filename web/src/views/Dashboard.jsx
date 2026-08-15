@@ -42,7 +42,11 @@ export function Dashboard() {
         <Stat
           label="Memoria del host"
           value={system ? formatBytes(system.memory_used) : '—'}
-          hint={system ? `${formatBytes(system.memory_total)} total` : ''}
+            hint={
+              system
+                ? `${formatBytes(system.memory_available)} disponibles · ${formatBytes(system.memory_total)} total`
+                : ''
+            }
           meter={memoryPercent}
           tone={memoryPercent > 90 ? 'danger' : 'accent'}
         />

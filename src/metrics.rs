@@ -42,13 +42,36 @@ impl HostMetrics {
 
         let memory = read_meminfo()?;
         let memory_total = memory.get("MemTotal").copied().unwrap_or_default() * 1024;
+        let memory_free = memory.get("MemFree").copied().unwrap_or_default() * 1024;
+        let buffers = memory.get("Buffers").copied().unwrap_or_default() * 1024;
+        let cached = memory.get("Cached").copied().unwrap_or_default() * 1024;
+        let reclaimable = memory.get("SReclaimable").copied().unwrap_or_default() * 1024;
+        let shared = memory.get("Shmem").copied().unwrap_or_default() * 1024;
+        let reclaimable_cache = cached
+            .saturating_add(reclaimable)
+            .saturating_sub(shared);
+
+        // M├®trica tipo htop: excluye buffers y page cache recuperable.
+        // `MemTotal - MemAvailable` es ├║til para presi├│n de memoria, pero hace
+        // parecer que el host consume m├ís RAM de aplicaciones de la real.
+        let memory_used = memory_total
+            .saturating_sub(memory_free)
+            .saturating_sub(buffers)
+            .saturating_sub(reclaimable_cache);
         let memory_available = memory
             .get("MemAvailable")
             .copied()
-            .or_else(|| memory.get("MemFree").copied())
-            .unwrap_or_default()
+            .unwrap_or_else(|| {
+                memory
+                    .get("MemFree")
+                    .copied()
+                    .unwrap_or_default()
+                    .saturating_add(memory.get("Buffers").copied().unwrap_or_default())
+                    .saturating_add(memory.get("Cached").copied().unwrap_or_default())
+                    .saturating_add(memory.get("SReclaimable").copied().unwrap_or_default())
+                    .saturating_sub(memory.get("Shmem").copied().unwrap_or_default())
+            })
             * 1024;
-        let memory_used = memory_total.saturating_sub(memory_available);
         let swap_total = memory.get("SwapTotal").copied().unwrap_or_default() * 1024;
         let swap_free = memory.get("SwapFree").copied().unwrap_or_default() * 1024;
         let swap_used = swap_total.saturating_sub(swap_free);

@@ -307,11 +307,14 @@ impl App {
             ("POST", ["api", "projects"]) => self.create_project(request),
             ("DELETE", ["api", "projects", slug]) => self.delete_project(slug, request),
             ("GET", ["api", "projects", slug, "logs"]) => self.project_logs(slug, request),
+            ("GET", ["api", "projects", slug, "environment"]) => self.project_environment(slug),
+            ("POST", ["api", "projects", slug, "environment"]) => self.update_project_environment(slug, request),
             ("POST", ["api", "projects", slug, "deploy"]) => {
                 self.deploy_project(slug, request, "manual")
             }
             ("POST", ["api", "projects", slug, "rollback"]) => self.rollback_project(slug),
             ("GET", ["api", "history"]) => self.history(request),
+            ("GET", ["api", "history", "page"]) => self.history_page(request),
 
             ("GET", ["api", "registry", "search"]) => self.registry_search(request),
             ("GET", ["api", "registry", "tags"]) => self.registry_tags(request),
@@ -703,6 +706,151 @@ impl App {
         }
     }
 
+    fn project_environment(&self, slug: &str) -> Response {
+        if !valid_slug(slug) {
+            return json_error(400, "slug inválido");
+        }
+        let project = match self.store.project(slug) {
+            Ok(Some(project)) => project,
+            Ok(None) => return json_error(404, "proyecto no encontrado"),
+            Err(error) => return json_error(500, &error),
+        };
+        let Some(env_file) = project.env_file.as_ref() else {
+            return json_error(409, "este recurso no tiene archivo .env gestionado por el panel");
+        };
+        let env_file = match canonical_existing_within(&self.config.allowed_root, env_file) {
+            Ok(path) if path.is_file() => path,
+            Ok(_) => return json_error(409, "el archivo .env del recurso ya no existe"),
+            Err(error) => return json_error(422, &error),
+        };
+        let contents = match fs::read_to_string(&env_file) {
+            Ok(contents) => contents,
+            Err(error) => return json_error(500, &format!("no se pudo leer .env: {error}")),
+        };
+        let managed = managed_environment_keys(&project);
+        let environment = editable_environment(&contents, &managed);
+        let managed_json = managed
+            .iter()
+            .map(|key| json_string(key))
+            .collect::<Vec<_>>()
+            .join(",");
+        Response::json(
+            200,
+            format!(
+                "{{\"environment\":{},\"managed_keys\":[{}]}}",
+                json_string(&environment),
+                managed_json
+            ),
+        )
+    }
+
+    fn update_project_environment(&self, slug: &str, request: &Request) -> Response {
+        if !valid_slug(slug) {
+            return json_error(400, "slug inválido");
+        }
+        if let Err(error) = self.require_docker_compose() {
+            return json_error(503, &error);
+        }
+        let project = match self.store.project(slug) {
+            Ok(Some(project)) => project,
+            Ok(None) => return json_error(404, "proyecto no encontrado"),
+            Err(error) => return json_error(500, &error),
+        };
+        let Some(env_file) = project.env_file.as_ref() else {
+            return json_error(409, "este recurso no tiene archivo .env gestionado por el panel");
+        };
+        let env_file = match canonical_existing_within(&self.config.allowed_root, env_file) {
+            Ok(path) if path.is_file() => path,
+            Ok(_) => return json_error(409, "el archivo .env del recurso ya no existe"),
+            Err(error) => return json_error(422, &error),
+        };
+        let fields = match request.form() {
+            Ok(fields) => fields,
+            Err(error) => return json_error(400, &error),
+        };
+        let raw = fields.get("environment").map_or("", String::as_str);
+        let managed = managed_environment_keys(&project);
+        let managed_refs = managed.iter().map(String::as_str).collect::<Vec<_>>();
+        let environment = match parse_environment_with_reserved(raw, &managed_refs) {
+            Ok(environment) => environment,
+            Err(error) => return json_error(422, &error),
+        };
+        let original = match fs::read_to_string(&env_file) {
+            Ok(contents) => contents,
+            Err(error) => return json_error(500, &format!("no se pudo leer .env: {error}")),
+        };
+        let updated = replace_editable_environment(&original, &environment, &managed);
+        if updated == original {
+            return Response::json(
+                200,
+                "{\"ok\":true,\"changed\":false,\"message\":\"No había cambios que aplicar.\"}"
+                    .to_owned(),
+            );
+        }
+        if let Err(error) = atomic_write(&env_file, updated.as_bytes(), 0o600) {
+            return json_error(500, &format!("no se pudo actualizar .env: {error}"));
+        }
+        if let Err(error) = self.docker.validate_compose(&project.compose_file) {
+            let _ = atomic_write(&env_file, original.as_bytes(), 0o600);
+            return json_error(
+                422,
+                &format!("las variables dejan el Compose inválido: {error}"),
+            );
+        }
+        let started = Instant::now();
+        match self.docker.deploy_pulled(&project) {
+            Ok(result) if result.success => {
+                let deployment = Deployment {
+                    id: 0,
+                    project: project.slug.clone(),
+                    created_at: now_unix(),
+                    status: "success".to_owned(),
+                    branch: project.branch.clone(),
+                    commit: None,
+                    image: project.current_image.clone(),
+                    previous_image: project.current_image.clone(),
+                    message: "Variables de entorno actualizadas; Docker recreó el servicio si era necesario."
+                        .to_owned(),
+                    duration_ms: result.duration_ms.max(started.elapsed().as_millis()),
+                    trigger: "environment".to_owned(),
+                };
+                if let Err(error) = self.store.append_deployment(deployment) {
+                    return json_error(
+                        500,
+                        &format!("variables aplicadas, pero no se pudo registrar el cambio: {error}"),
+                    );
+                }
+                Response::json(
+                    200,
+                    "{\"ok\":true,\"changed\":true,\"message\":\"Variables actualizadas y aplicadas al recurso.\"}"
+                        .to_owned(),
+                )
+            }
+            Ok(result) => {
+                let _ = atomic_write(&env_file, original.as_bytes(), 0o600);
+                let restored = self
+                    .docker
+                    .deploy_pulled(&project)
+                    .map(|restore| restore.success)
+                    .unwrap_or(false);
+                let suffix = if restored {
+                    " Se restauró el .env anterior."
+                } else {
+                    " No se pudo confirmar la restauración automática."
+                };
+                json_error(
+                    502,
+                    &format!("Docker no pudo aplicar las variables: {}{suffix}", result.summary()),
+                )
+            }
+            Err(error) => {
+                let _ = atomic_write(&env_file, original.as_bytes(), 0o600);
+                let _ = self.docker.deploy_pulled(&project);
+                json_error(502, &format!("no se pudieron aplicar las variables: {error}"))
+            }
+        }
+    }
+
     // ── Despliegues ────────────────────────────────────────────────────────
 
     fn deploy_project(&self, slug: &str, request: &Request, trigger: &str) -> Response {
@@ -1088,6 +1236,38 @@ impl App {
                         .map(Deployment::to_json)
                         .collect::<Vec<_>>()
                         .join(",")
+                ),
+            ),
+            Err(error) => json_error(500, &error),
+        }
+    }
+
+    fn history_page(&self, request: &Request) -> Response {
+        let project = request.query.get("project").map(String::as_str);
+        let offset = request
+            .query
+            .get("offset")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        let limit = request
+            .query
+            .get("limit")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(10)
+            .clamp(1, 50);
+        match self.store.history_page(project, offset, limit) {
+            Ok((deployments, total)) => Response::json(
+                200,
+                format!(
+                    "{{\"items\":[{}],\"total\":{},\"offset\":{},\"limit\":{}}}",
+                    deployments
+                        .iter()
+                        .map(Deployment::to_json)
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    total,
+                    offset,
+                    limit
                 ),
             ),
             Err(error) => json_error(500, &error),
@@ -1891,9 +2071,14 @@ fn parse_port(fields: &HashMap<String, String>, name: &str) -> Result<Option<u16
 
 /// Convierte un bloque `CLAVE=valor` por líneas en pares validados.
 fn parse_environment(raw: &str) -> Result<Vec<(String, String)>, String> {
-    const RESERVED: [&str; 2] = ["APP_IMAGE", "TDM_MEMORY_LIMIT"];
-    let mut pairs = Vec::new();
+    parse_environment_with_reserved(raw, &["APP_IMAGE", "TDM_MEMORY_LIMIT"])
+}
 
+fn parse_environment_with_reserved(
+    raw: &str,
+    reserved: &[&str],
+) -> Result<Vec<(String, String)>, String> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
     for line in raw.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -1908,8 +2093,11 @@ fn parse_environment(raw: &str) -> Result<Vec<(String, String)>, String> {
         if !valid_env_key(key) {
             return Err(format!("clave de entorno inválida: {key}"));
         }
-        if RESERVED.contains(&key) {
+        if reserved.contains(&key) {
             return Err(format!("{key} lo gestiona el panel; usa otro nombre"));
+        }
+        if pairs.iter().any(|(existing, _)| existing == key) {
+            return Err(format!("clave de entorno repetida: {key}"));
         }
         if value.len() > 4096 || value.contains(['\r', '\n', '\0']) {
             return Err(format!("valor inválido para {key}"));
@@ -1920,6 +2108,72 @@ fn parse_environment(raw: &str) -> Result<Vec<(String, String)>, String> {
         pairs.push((key.to_owned(), value.to_owned()));
     }
     Ok(pairs)
+}
+
+/// Variables del `.env` que gestiona el panel y el editor nunca debe tocar.
+fn managed_environment_keys(project: &Project) -> Vec<String> {
+    let mut keys = vec!["TDM_MEMORY_LIMIT".to_owned()];
+    if let Some(image_env) = project.image_env.as_ref() {
+        if !keys.iter().any(|key| key == image_env) {
+            keys.push(image_env.clone());
+        }
+    }
+    keys
+}
+
+/// Bloque `CLAVE=valor` editable extraído del `.env` actual.
+fn editable_environment(contents: &str, managed: &[String]) -> String {
+    contents
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                return None;
+            }
+            let (key, value) = trimmed.split_once('=')?;
+            let key = key.trim();
+            if !valid_env_key(key) || managed.iter().any(|reserved| reserved == key) {
+                return None;
+            }
+            Some(format!("{key}={}", value.trim()))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Sustituye las líneas editables del `.env` por las nuevas, conservando
+/// comentarios y variables gestionadas por el panel en su sitio.
+fn replace_editable_environment(
+    original: &str,
+    environment: &[(String, String)],
+    managed: &[String],
+) -> String {
+    let mut lines = Vec::new();
+    for line in original.lines() {
+        let trimmed = line.trim_start();
+        let editable_assignment = !trimmed.starts_with('#')
+            && trimmed.split_once('=').is_some_and(|(key, _)| {
+                let key = key.trim();
+                valid_env_key(key) && !managed.iter().any(|reserved| reserved == key)
+            });
+        if !editable_assignment {
+            lines.push(line.to_owned());
+        }
+    }
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    if !lines.is_empty() && !environment.is_empty() {
+        lines.push(String::new());
+    }
+    for (key, value) in environment {
+        lines.push(format!("{key}={value}"));
+    }
+    let mut updated = lines.join("\n");
+    if !updated.is_empty() {
+        updated.push('\n');
+    }
+    updated
 }
 
 fn valid_host(value: &str) -> bool {
@@ -2067,6 +2321,25 @@ mod tests {
         assert!(parse_environment("SIN_IGUAL").is_err());
         assert!(parse_environment("APP_IMAGE=otra:1").is_err());
         assert!(parse_environment("TDM_MEMORY_LIMIT=99g").is_err());
+    }
+
+    #[test]
+    fn environment_editor_preserves_managed_keys() {
+        let original = "APP_IMAGE=tinkiva/demo:abc\nTDM_MEMORY_LIMIT=512m\nOLD=1\n";
+        let managed = vec!["TDM_MEMORY_LIMIT".to_owned(), "APP_IMAGE".to_owned()];
+        let parsed = parse_environment_with_reserved("NEW=value\nPORT=3000", &["TDM_MEMORY_LIMIT", "APP_IMAGE"]).unwrap();
+        let updated = replace_editable_environment(original, &parsed, &managed);
+
+        assert!(updated.contains("APP_IMAGE=tinkiva/demo:abc"));
+        assert!(updated.contains("TDM_MEMORY_LIMIT=512m"));
+        assert!(updated.contains("NEW=value"));
+        assert!(updated.contains("PORT=3000"));
+        assert!(!updated.contains("OLD=1"));
+    }
+
+    #[test]
+    fn environment_editor_rejects_duplicate_keys() {
+        assert!(parse_environment_with_reserved("PORT=3000\nPORT=4000", &[]).is_err());
     }
 
     #[test]

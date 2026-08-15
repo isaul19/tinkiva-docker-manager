@@ -161,6 +161,11 @@ const API = {
       trigger: 'webhook',
     },
   ],
+  '/api/history/page': {
+    items: [{ id: 3, project: 'storagia-api', created_at: 1_700_000_200, status: 'success', branch: 'main', commit: 'a1b2c3d4e5f6', image: 'ghcr.io/isaul19/api:sha', previous_image: null, message: 'Deployment completado.', duration_ms: 4200, trigger: 'webhook' }],
+    total: 1, offset: 0, limit: 10,
+  },
+  '/api/projects/storagia-api/environment': { environment: 'NODE_ENV=production\nPORT=3000', managed_keys: ['TDM_MEMORY_LIMIT', 'APP_IMAGE'] },
   '/api/processes': [
     {
       pid: 1,

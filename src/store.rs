@@ -126,16 +126,34 @@ impl Store {
     }
 
     pub fn history(&self, project: Option<&str>, limit: usize) -> Result<Vec<Deployment>, String> {
+        self.history_page(project, 0, limit).map(|(items, _)| items)
+    }
+
+    /// Página del historial: solo clona los registros visibles.
+    pub fn history_page(
+        &self,
+        project: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<Deployment>, usize), String> {
         let state = self.lock()?;
-        let limit = limit.clamp(1, 500);
-        Ok(state
+        let limit = limit.clamp(1, 100);
+        let total = state
             .deployments
             .iter()
             .rev()
             .filter(|deployment| project.is_none_or(|slug| deployment.project == slug))
+            .count();
+        let items = state
+            .deployments
+            .iter()
+            .rev()
+            .filter(|deployment| project.is_none_or(|slug| deployment.project == slug))
+            .skip(offset)
             .take(limit)
             .cloned()
-            .collect())
+            .collect();
+        Ok((items, total))
     }
 
     /// Último despliegue registrado de un proyecto, exitoso o no.
@@ -155,7 +173,12 @@ impl Store {
             .deployments
             .iter()
             .rev()
-            .find(|deployment| deployment.project == project && deployment.status == "success")
+            .find(|deployment| {
+                deployment.project == project
+                    && deployment.status == "success"
+                    && deployment.previous_image.is_some()
+                    && deployment.previous_image != deployment.image
+            })
             .and_then(|deployment| deployment.previous_image.clone())
             .filter(|image| !image.is_empty()))
     }

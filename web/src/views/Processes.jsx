@@ -4,7 +4,9 @@ import { api } from '../lib/api.js';
 import { useApp } from '../lib/context.js';
 import { useAsync, usePolling } from '../lib/hooks.js';
 import { formatBytes } from '../lib/format.js';
-import { AsyncBlock, EmptyState, Panel } from '../ui/Primitives.jsx';
+import { AsyncBlock, EmptyState, Pagination, Panel } from '../ui/Primitives.jsx';
+
+const PAGE_SIZE = 10;
 
 const COLUMNS = [
   { key: 'cpu_percent', label: 'CPU', numeric: true },
@@ -15,6 +17,7 @@ export function Processes() {
   const { refreshToken } = useApp();
   const [sort, setSort] = useState({ key: 'cpu_percent', direction: 'desc' });
   const [filter, setFilter] = useState('');
+  const [page, setPage] = useState(0);
 
   const processes = useAsync(() => api.get('/api/processes'), [refreshToken]);
   usePolling(processes.reload, 10_000);
@@ -34,12 +37,14 @@ export function Processes() {
     return [...filtered].sort((left, right) => (left[sort.key] - right[sort.key]) * factor);
   }, [processes.data, sort, filter]);
 
-  const toggle = (key) =>
+  const toggle = (key) => {
+    setPage(0);
     setSort((current) =>
       current.key === key
         ? { key, direction: current.direction === 'desc' ? 'asc' : 'desc' }
         : { key, direction: 'desc' },
     );
+  };
 
   return (
     <>
@@ -50,7 +55,7 @@ export function Processes() {
           type="search"
           placeholder="Filtrar por nombre, usuario o comando"
           value={filter}
-          onInput={(event) => setFilter(event.currentTarget.value)}
+          onInput={(event) => { setFilter(event.currentTarget.value); setPage(0); }}
         />
       </div>
 
@@ -59,9 +64,13 @@ export function Processes() {
           query={processes}
           empty={<EmptyState icon={Cpu} title="No se pudieron leer los procesos" />}
         >
-          {() => (
-            <div class="table-scroll">
-              <table class="data-table">
+          {() => {
+            const lastPage = Math.max(0, Math.ceil(rows.length / PAGE_SIZE) - 1);
+            const currentPage = Math.min(page, lastPage);
+            const visible = rows.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+            return <>
+              <div class="table-scroll">
+                <table class="data-table">
                 <thead>
                   <tr>
                     <th>PID</th>
@@ -85,7 +94,7 @@ export function Processes() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.slice(0, 200).map((entry) => (
+                  {visible.map((entry) => (
                     <tr key={entry.pid}>
                       <td class="numeric mono">{entry.pid}</td>
                       <td>
@@ -101,9 +110,11 @@ export function Processes() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
-            </div>
-          )}
+                </table>
+              </div>
+              <Pagination page={currentPage} total={rows.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
+            </>;
+          }}
         </AsyncBlock>
       </Panel>
     </>
