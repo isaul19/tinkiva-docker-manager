@@ -405,7 +405,7 @@ mod tests {
         assert_eq!(project.kind, crate::model::KIND_COMPOSE);
         assert_eq!(project.repository, None);
         assert_eq!(project.installation_id, None);
-        // Al reescribirlo queda en TDM2 sin perder nada.
-        assert!(serialize_state(&decoded).starts_with("TDM2\t3\n"));
+        // Al reescribirlo queda en TDM3 sin perder nada.
+        assert!(serialize_state(&decoded).starts_with("TDM3\t3\n"));
     }
 }
