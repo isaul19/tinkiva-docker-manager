@@ -1,7 +1,8 @@
 use crate::util::{atomic_write, random_hex, unique_suffix};
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -304,10 +305,10 @@ pub fn run_self_update(requested_tag: Option<&str>) -> Result<(), String> {
 
     let executable = std::env::current_exe()
         .map_err(|error| format!("no se pudo determinar la ruta del binario: {error}"))?;
-    std::fs::set_permissions(&binary_path, std::fs::Permissions::from_mode(0o755))
+    fs::set_permissions(&binary_path, fs::Permissions::from_mode(0o755))
         .map_err(|error| format!("no se pudo dar permisos de ejecución: {error}"))?;
-    if let Err(error) = std::fs::rename(&binary_path, &executable) {
-        let _ = std::fs::remove_dir_all(&directory);
+    if let Err(error) = replace_executable(&binary_path, &executable) {
+        let _ = fs::remove_dir_all(&directory);
         if error.kind() == io::ErrorKind::PermissionDenied {
             return Err(format!(
                 "sin permisos para reemplazar {}. Ejecuta el mismo comando con sudo.",
@@ -316,7 +317,7 @@ pub fn run_self_update(requested_tag: Option<&str>) -> Result<(), String> {
         }
         return Err(format!("no se pudo reemplazar el binario: {error}"));
     }
-    let _ = std::fs::remove_dir_all(&directory);
+    let _ = fs::remove_dir_all(&directory);
 
     println!("✔ Actualizado a {} (antes {}).", tag.trim_start_matches('v'), env!("CARGO_PKG_VERSION"));
     if Path::new("/etc/systemd/system/tinkiva-docker-manager.service").exists() {
@@ -325,6 +326,43 @@ pub fn run_self_update(requested_tag: Option<&str>) -> Result<(), String> {
         println!("  Vuelve a ejecutar el binario para usar la nueva versión.");
     }
     Ok(())
+}
+
+/// Copia la descarga a un archivo hermano del ejecutable y luego hace un
+/// `rename` atómico. El archivo intermedio comparte filesystem con el destino,
+/// por lo que funciona aunque `/tmp` sea otro volumen o un tmpfs.
+fn replace_executable(downloaded: &Path, executable: &Path) -> io::Result<()> {
+    let parent = executable.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "el ejecutable no tiene directorio padre")
+    })?;
+    let name = executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("tinkivadm");
+    let staged = parent.join(format!(".{name}.update-{}", unique_suffix()));
+
+    let result = (|| {
+        let mut source = fs::File::open(downloaded)?;
+        let mut target = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o755)
+            .open(&staged)?;
+        io::copy(&mut source, &mut target)?;
+        target.sync_all()?;
+        drop(target);
+        fs::set_permissions(&staged, fs::Permissions::from_mode(0o755))?;
+        fs::rename(&staged, executable)?;
+        if let Ok(directory) = fs::File::open(parent) {
+            let _ = directory.sync_all();
+        }
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&staged);
+    }
+    result
 }
 
 fn fetch_latest_tag(repo: &str) -> Result<String, String> {
@@ -491,5 +529,31 @@ fn ask_port(reader: &mut io::StdinLock, default: u16) -> Result<u16, String> {
             Ok(port) if port >= 1 => return Ok(port),
             _ => println!("  ✗ Ingresa un puerto entre 1 y 65535."),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn update_replacement_is_atomic_and_executable() {
+        let directory = std::env::temp_dir().join(format!("tdm-update-test-{}", unique_suffix()));
+        fs::create_dir(&directory).unwrap();
+        let downloaded = directory.join("downloaded");
+        let executable = directory.join("tinkivadm");
+        fs::write(&downloaded, b"version nueva").unwrap();
+        fs::write(&executable, b"version anterior").unwrap();
+
+        replace_executable(&downloaded, &executable).unwrap();
+
+        assert_eq!(fs::read(&executable).unwrap(), b"version nueva");
+        assert_eq!(fs::metadata(&executable).unwrap().permissions().mode() & 0o777, 0o755);
+        assert!(fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|entry| !entry.file_name().to_string_lossy().contains(".update-")));
+        fs::remove_dir_all(directory).unwrap();
     }
 }

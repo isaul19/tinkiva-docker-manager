@@ -21,6 +21,11 @@
 - La página Sistema y el diálogo «Añadir recurso» distinguen entre Docker caído y
   Compose ausente, cada uno con su mensaje.
 
+### Actualización
+
+- `tinkivadm update` prepara el reemplazo junto al ejecutable antes del cambio atómico;
+  ya no falla con `Cross-device link` cuando `/tmp` y el binario están en volúmenes distintos.
+
 ## 0.3.0 — 2026-08-15
 
 ### Auto-deploy sin exponer el panel
