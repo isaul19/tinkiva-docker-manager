@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3 — 2026-08-14
+
+- Todo el estado local (config, pid, log, datos, apps) vive dentro de `tinkiva/`.
+- Mensaje de parada literal `tinkivadm stop` y errores de arranque con la última línea del log.
+- Compatible con `tinkiva.env` previo en el directorio actual.
+
 ## 0.1.2 — 2026-08-14
 
 - Nueva página de Procesos del host: top por CPU y RAM con ordenamiento.
