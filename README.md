@@ -164,8 +164,8 @@ Tinkiva puede detectar cambios y redesplegar automáticamente.
 ### Docker Compose
 
 Si ya tienes una aplicación funcionando mediante Compose, puedes registrarla sin modificar su
-estructura. También es la vía para levantar una imagen suelta de cualquier registro —Docker
-Hub, GHCR o uno privado—: pegas su Compose y el panel lo guarda como recurso editable.
+estructura. También es la vía para levantar una imagen suelta de cualquier registro —Docker Hub,
+GHCR o uno privado—: pegas su Compose y el panel lo guarda como recurso editable.
 
 ```yaml
 services:
@@ -618,6 +618,131 @@ npm run watch
 
 ---
 
+# Desarrollo en Windows
+
+El panel es **solo Linux**: usa `std::os::unix` para permisos, señales y `/proc`, así que no compila
+en Windows nativo. Se desarrolla dentro de WSL2, que además da el mismo Linux que corre en el
+servidor.
+
+### 1. WSL2 y Ubuntu
+
+En PowerShell **como administrador**:
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Reinicia, abre Ubuntu y crea tu usuario. Comprueba que es WSL2:
+
+```powershell
+wsl -l -v
+```
+
+La columna `VERSION` debe decir `2`.
+
+### 2. Docker Desktop
+
+Instala Docker Desktop y activa la integración con la distro:
+
+```text
+Settings → Resources → WSL integration → Ubuntu
+```
+
+Desde Ubuntu, esto tiene que responder sin `sudo`:
+
+```bash
+docker ps
+docker compose version
+```
+
+Sin eso el panel arranca, pero avisa de que Docker no está accesible y casi nada funciona.
+
+### 3. Rust y Node
+
+Dentro de Ubuntu:
+
+```bash
+sudo apt update && sudo apt install -y build-essential curl git
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
+
+`build-essential` no es opcional: `cargo` necesita `cc` para enlazar. La versión de Rust la fija
+`rust-toolchain.toml`, así que rustup la descarga sola la primera vez.
+
+Node 20+ solo hace falta si vas a tocar `web/`. El `nodejs` de los repos de Ubuntu suele ir por
+detrás, así que mejor con nvm:
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+source "$HOME/.nvm/nvm.sh"
+nvm install 20
+cd web && npm install
+```
+
+### 4. Dónde clonar
+
+Puedes trabajar sobre el repositorio de Windows en `/mnt/c/...`, que es lo cómodo si editas con VS
+Code desde Windows. A cambio, el sistema de archivos cruzado es lento: si notas que `cargo build` se
+arrastra, clona dentro de la distro (`~/tinkiva-docker-manager`) y usa la extensión **WSL** de VS
+Code.
+
+### 5. Para ver los cambios
+
+Solo si tocaste el frontend:
+
+```bash
+cd web && npm run build && cd ..
+```
+
+Después, siempre:
+
+```bash
+cargo build --release
+sudo cp target/release/tmanager /usr/local/bin/tmanager
+tmanager stop;
+tmanager start
+```
+
+El bundle de `web/dist` se incrusta con `include_str!`, así que `cargo build` lo recompila solo
+cuando el archivo cambió. Abre `http://127.0.0.1:8787` en el navegador de Windows: WSL2 reenvía
+`localhost`, aquí no hace falta túnel.
+
+El token de acceso:
+
+```bash
+tmanager token
+```
+
+### 6. Pruebas
+
+```bash
+cargo test
+cd web && npm test && cd ..
+./scripts/smoke-test.sh
+```
+
+Si el repositorio vive en `/mnt/c` con `core.autocrlf` activado, los `.sh` llegan con terminaciones
+CRLF y bash falla con `bad interpreter`. Cópialos y límpialos antes:
+
+```bash
+cp -r scripts tests /tmp/tdm-smoke/
+sed -i 's/\r$//' /tmp/tdm-smoke/{scripts,tests}/*.sh
+```
+
+### 7. Desde Windows, sin entrar a WSL
+
+Para una comprobación rápida de tipos desde PowerShell, sin compilar de verdad:
+
+```powershell
+rustup target add x86_64-unknown-linux-gnu
+cargo check --target x86_64-unknown-linux-gnu
+```
+
+Sirve para ver errores del compilador mientras editas. Para ejecutar, siempre WSL.
+
+---
+
 # Requisitos
 
 ### Producción
@@ -638,6 +763,7 @@ Opcional según funcionalidades:
 
 - Rust 1.85+
 - Node.js 20+ para modificar el frontend
+- En Windows, WSL2 con Ubuntu — el binario no compila fuera de Linux
 
 ---
 
@@ -868,21 +994,20 @@ Consulta [LICENSE](./LICENSE).
 Parte del desarrollo de este proyecto fue asistida por agentes de IA bajo dirección y revisión
 humana:
 
-- **GLM 5.3**: trabajé en la seguridad del panel: generación del token administrador
-  con 192 bits de entropía desde `/dev/urandom`, guardado con permisos `0600`,
-  comparación en tiempo constante y corrección del bug que impedía mostrar el token
-  regenerado. En general recomiendo acceder mediante túneles SSH en lugar de exponer
-  puertos directamente, para mantener el endpoint privado y reducir la superficie
-  de ataque.
+- **GLM 5.3**: trabajé en la seguridad del panel: generación del token administrador con 192 bits de
+  entropía desde `/dev/urandom`, guardado con permisos `0600`, comparación en tiempo constante y
+  corrección del bug que impedía mostrar el token regenerado. En general recomiendo acceder mediante
+  túneles SSH en lugar de exponer puertos directamente, para mantener el endpoint privado y reducir
+  la superficie de ataque.
 - **Claude Opus 5**: trabajé sobre todo en la interfaz y la experiencia de uso — que las vistas se
   lean de un vistazo, que los diálogos guíen en lugar de interrogar y que la aplicación siga
   hablando un solo idioma. La restricción más interesante fue que nada de eso podía costar peso: la
   interfaz entera sigue siendo un puñado de kilobytes que viajan dentro del binario. También
   implementé la exportación SQL de bases de datos, resolviéndola con volcado a disco y envío por
   trozos para no romper la premisa de memoria constante del panel.
-- **GPT Sol ULTRA** (`openai-gpt-sol-ultra`): participé en la creación de
-  la base del proyecto, la planificación inicial y la definición de su alcance. También realicé
-  correcciones generales en el frontend y el backend, además de ajustes de integración y documentación.
+- **GPT 5.6 Sol**: participé en la creación de la base del proyecto, la planificación inicial y la
+  definición de su alcance. También realicé correcciones generales en el frontend y el backend,
+  además de ajustes de integración y documentación.
 
 Ninguno de estos asistentes sustituye el criterio de quien mantiene el proyecto: las decisiones, la
 revisión y los errores siguen siendo humanos.

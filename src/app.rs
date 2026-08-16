@@ -429,6 +429,7 @@ impl App {
                     "\"deployments\":{},",
                     "\"capabilities\":{},",
                     "\"github_connected\":{},",
+                    "\"ecr_registry\":{},",
                     "\"docker\":{}",
                     "}}"
                 ),
@@ -441,9 +442,21 @@ impl App {
                 deployments,
                 self.capabilities.to_json(),
                 self.github.is_connected(),
+                // Vacío mientras no haya credenciales: sirve de bandera y, cuando
+                // las hay, ahorra al usuario teclear el host del registro.
+                json_string(&self.ecr_registry_host()),
                 docker.to_json(),
             ),
         )
+    }
+
+    fn ecr_registry_host(&self) -> String {
+        self.ecr
+            .credentials()
+            .ok()
+            .flatten()
+            .map(|credentials| credentials.registry_host())
+            .unwrap_or_default()
     }
 
     /// Catálogo estático que alimenta el diálogo «Añadir recurso».

@@ -10,6 +10,10 @@
   primitivas que ya existían en `crypto`: **no añade dependencias ni exige el CLI de `aws`**
   en el servidor. La contraseña viaja por `--password-stdin`, nunca por `argv`, y las
   credenciales se guardan con permisos 0600.
+- **«Imagen de Amazon ECR» como origen en «Añadir recurso»**, habilitado solo cuando hay
+  credenciales guardadas (y con el motivo escrito en la tarjeta cuando no las hay). Abre el
+  formulario de Compose con el host del registro ya puesto y la imagen a vigilar apuntando a
+  la misma etiqueta, que es todo lo que hace falta para que redespliegue en cada push del CI.
 - **Auto-deploy desde cualquier registro para recursos Compose**: el formulario acepta una
   «imagen a vigilar» opcional y el watcher compara su digest cada ronda, redesplegando cuando
   el registro publica una versión nueva. Funciona con ECR, GHCR o Docker Hub.
@@ -26,8 +30,18 @@
   justo lo que permite volver atrás. Esas imágenes salen marcadas como «Rollback» en la
   tabla y solo pueden borrarse una a una, con un aviso explícito.
 
+### Documentación
+
+- Sección **«Desarrollo en Windows»** en el README: WSL2 con Ubuntu, la integración de Docker
+  Desktop con la distro, Rust y Node dentro de la distro, el ciclo
+  `npm run build` → `cargo build --release` → `cp` → `tmanager stop; start`, y las dos trampas
+  del sistema de archivos cruzado (lentitud en `/mnt/c` y los `.sh` con CRLF).
+
 ### Correcciones
 
+- La política de ejemplo de ECR limitaba las acciones de descarga a un único repositorio, que
+  no es lo normal: ahora usa `"*"` y explica cómo acotarla si alguien lo quiere. El
+  formulario tampoco pide ya el ID de cuenta, porque era opcional y el propio token lo dice.
 - **`stop` no encontraba el panel** cuando la configuración estaba suelta en la raíz
   (`./tinkiva.env`, el layout anterior a 0.9). En ese caso la raíz de estado es el propio
   directorio de trabajo, así que el archivo pid coincidía con el «pid heredado» que la

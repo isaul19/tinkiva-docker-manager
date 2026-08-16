@@ -5,12 +5,39 @@ import { Button } from '../ui/Primitives.jsx';
 import { Field, FormGrid, Input, TextArea } from '../ui/Form.jsx';
 import { useToast } from '../ui/Toast.jsx';
 
+/**
+ * Esqueleto para desplegar una imagen ya publicada en un registro privado. Deja
+ * el host puesto y la imagen vigilada apuntando a la misma etiqueta, que es lo
+ * único que hace falta para que el panel redespliegue en cada push del CI.
+ */
+function registryDraft(registry) {
+  const image = `${registry}/mi-imagen:latest`;
+  return {
+    watch_image: image,
+    compose: [
+      'services:',
+      '  app:',
+      `    image: ${image}`,
+      '    restart: unless-stopped',
+      '    ports:',
+      '      - "127.0.0.1:8080:8080"',
+      '',
+    ].join('\n'),
+  };
+}
+
 /** Crea un recurso gestionado a partir de un docker-compose pegado como YAML. */
-export function ComposeTextForm({ onCreated }) {
+export function ComposeTextForm({ onCreated, registry }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [slugTouched, setSlugTouched] = useState(false);
-  const [form, setForm] = useState({ name: '', slug: '', compose: '', watch_image: '' });
+  const [form, setForm] = useState({
+    name: '',
+    slug: '',
+    compose: '',
+    watch_image: '',
+    ...(registry ? registryDraft(registry) : {}),
+  });
 
   const update = (key) => (event) =>
     setForm((current) => ({ ...current, [key]: event.currentTarget.value }));
@@ -42,7 +69,9 @@ export function ComposeTextForm({ onCreated }) {
   };
 
   return <form onSubmit={submit} autocomplete="off">
-    <p class="muted small">Pega el contenido de tu <code>docker-compose.yml</code>. Se guardará en un recurso propio y podrás editarlo como texto después.</p>
+    <p class="muted small">{registry
+      ? <>Sustituye <code>mi-imagen:latest</code> por tu repositorio en <code>{registry}</code> y ajusta los puertos. El panel hará <code>docker login</code> solo antes de cada descarga.</>
+      : <>Pega el contenido de tu <code>docker-compose.yml</code>. Se guardará en un recurso propio y podrás editarlo como texto después.</>}</p>
     <FormGrid>
       <Field label="Nombre" hint="Nombre visible del recurso en el panel.">
         <Input value={form.name} onInput={updateName} required maxLength={100} placeholder="Mi aplicación" />

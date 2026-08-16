@@ -7,6 +7,8 @@ import { AsyncBlock, Button, Panel } from '../ui/Primitives.jsx';
 import { CopyValue, Field, FormGrid, Input } from '../ui/Form.jsx';
 import { useToast } from '../ui/Toast.jsx';
 
+// `registry_id` sigue viajando vacío a propósito: el backend lo acepta, pero la
+// cuenta la dice el propio token, así que no hay por qué preguntarla.
 const EMPTY = { access_key_id: '', secret_access_key: '', region: 'us-east-1', registry_id: '' };
 
 /**
@@ -123,14 +125,16 @@ export function EcrView() {
         "ecr:GetDownloadUrlForLayer",
         "ecr:BatchGetImage"
       ],
-      "Resource": "arn:aws:ecr:REGION:CUENTA:repository/TU-REPO"
+      "Resource": "*"
     }
   ]
 }`}</pre>
                 <p class="muted small">
-                  <code>GetAuthorizationToken</code> es de cuenta y exige <code>"*"</code>, pero las
-                  tres de descarga sí se pueden limitar a los repositorios que despliegues. Cambia
-                  el ARN o pon <code>"*"</code> si quieres todos.
+                  <code>GetAuthorizationToken</code> es de cuenta y siempre exige <code>"*"</code>.
+                  Las tres de descarga valen para todos tus repositorios tal cual están; si algún
+                  día quieres acotarlas, cambia ese <code>"*"</code> por{' '}
+                  <code>arn:aws:ecr:REGION:CUENTA:repository/TU-REPO</code> y repite la línea por
+                  cada repositorio que despliegues.
                 </p>
 
                 <FormGrid>
@@ -150,18 +154,11 @@ export function EcrView() {
                       required
                     />
                   </Field>
-                  <Field label="Región" hint="La del registro, por ejemplo us-east-1.">
-                    <Input value={form.region} onInput={update('region')} required />
-                  </Field>
                   <Field
-                    label="ID de cuenta (opcional)"
-                    hint="Los 12 dígitos. Si lo dejas vacío se deduce del token."
+                    label="Región"
+                    hint="La del registro, por ejemplo us-east-1. La cuenta la deduce del token."
                   >
-                    <Input
-                      value={form.registry_id}
-                      onInput={update('registry_id')}
-                      placeholder="123456789012"
-                    />
+                    <Input value={form.region} onInput={update('region')} required />
                   </Field>
                 </FormGrid>
 

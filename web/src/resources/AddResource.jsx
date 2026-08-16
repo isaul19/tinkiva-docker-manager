@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { ArrowLeft, Database, Github, Layers } from 'lucide-preact';
+import { ArrowLeft, Cloud, Database, Layers } from 'lucide-preact';
 import { useApp } from '../lib/context.js';
 import { BrandIcon } from '../ui/BrandIcon.jsx';
 import { Modal } from '../ui/Modal.jsx';
@@ -23,6 +23,13 @@ const TYPES = [
     description: 'Dockerfile, Node, Python o frontend estático con detección automática.',
     icon: <BrandIcon slug="github" size={24} color="#f4f6f8" />,
     form: RepositoryForm,
+  },
+  {
+    id: 'ecr',
+    title: 'Imagen de Amazon ECR',
+    description: 'Despliega una imagen privada de tu registro y redespliégala sola en cada push.',
+    icon: <Cloud size={24} />,
+    form: ComposeTextForm,
   },
   {
     id: 'compose-text',
@@ -53,6 +60,7 @@ export function AddResource({ open, onClose, onCreated }) {
     if (!info?.docker?.compose_version) return 'Requiere Docker Compose';
     if (id === 'repository' && !capabilities.git) return 'Requiere git en el servidor';
     if (id === 'repository' && !info?.github_connected) return 'Conecta GitHub primero';
+    if (id === 'ecr' && !info?.ecr_registry) return 'Conecta Amazon ECR primero';
     return null;
   };
 
@@ -85,7 +93,7 @@ export function AddResource({ open, onClose, onCreated }) {
       {result ? (
         <ResultPanel result={result} />
       ) : selected ? (
-        <Form onCreated={setResult} />
+        <Form onCreated={setResult} registry={type === 'ecr' ? info?.ecr_registry : ''} />
       ) : (
         <div class="type-grid">
           {TYPES.map((entry) => {

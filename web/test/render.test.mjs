@@ -243,7 +243,7 @@ const API = {
 };
 
 /** Monta el bundle en un DOM limpio y devuelve utilidades de inspección. */
-async function mount({ token = null, hash = '#/dashboard' } = {}) {
+async function mount({ token = null, hash = '#/dashboard', api = {} } = {}) {
   const { window, document } = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
   );
@@ -260,7 +260,7 @@ async function mount({ token = null, hash = '#/dashboard' } = {}) {
   const fetchStub = async (path) => {
     calls.push(path);
     const [base] = String(path).split('?');
-    const body = API[base];
+    const body = base in api ? api[base] : API[base];
     if (body === undefined) {
       return {
         ok: false,
@@ -504,6 +504,39 @@ test('el origen de repositorio se bloquea si GitHub no está conectado', async (
   assert.match(card.textContent, /Conecta GitHub primero/);
 });
 
+test('el origen de ECR se bloquea mientras no haya credenciales', async () => {
+  const app = await mount({ token: 'x'.repeat(40) });
+  await app.click('button', 'Añadir recurso');
+
+  const card = app.find('.type-card', 'Imagen de Amazon ECR');
+  assert.ok(card, 'debe existir la tarjeta de ECR');
+  assert.ok(card.disabled, 'sin claves guardadas no se puede desplegar de ECR');
+  assert.match(card.textContent, /Conecta Amazon ECR primero/);
+});
+
+test('con ECR conectado el origen se habilita y trae el registro escrito', async () => {
+  const registry = '123456789012.dkr.ecr.us-east-1.amazonaws.com';
+  const app = await mount({
+    token: 'x'.repeat(40),
+    api: { '/api/info': { ...API['/api/info'], ecr_registry: registry } },
+  });
+  await app.click('button', 'Añadir recurso');
+
+  const card = app.find('.type-card', 'Imagen de Amazon ECR');
+  assert.ok(!card.disabled, 'con credenciales la tarjeta se habilita');
+
+  await app.click('.type-card', 'Imagen de Amazon ECR');
+  const compose = app.document.querySelector('textarea');
+  assert.ok(compose, 'el formulario de compose debe abrirse');
+  assert.match(compose.value, new RegExp(`${registry}/mi-imagen:latest`), 'host ya escrito');
+
+  const watched = [...app.document.querySelectorAll('input')].map((node) => node.value);
+  assert.ok(
+    watched.some((value) => value === `${registry}/mi-imagen:latest`),
+    'la imagen vigilada debe apuntar a la misma etiqueta',
+  );
+});
+
 test('el menú de un contenedor de base de datos abre el diálogo de exportación', async () => {
   const app = await mount({ token: 'x'.repeat(40), hash: '#/containers' });
   assert.match(app.currentText(), /storagia-postgres/);
@@ -596,6 +629,7 @@ test('Amazon ECR aparece en integraciones y pide unas claves de solo lectura', a
   assert.match(text, /Secret access key/);
   assert.match(text, /ecr:GetAuthorizationToken/, 'debe mostrar la política mínima');
   assert.doesNotMatch(text, /ecr:PutImage/, 'el panel no necesita permisos de escritura');
+  assert.doesNotMatch(text, /ID de cuenta/, 'la cuenta la deduce del token, no se pregunta');
 
   const secret = app.document.querySelector('input[type=password]');
   assert.ok(secret, 'el secret no debe escribirse en claro');
