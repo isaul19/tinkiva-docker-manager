@@ -20,6 +20,7 @@ mod registry;
 mod setup;
 mod store;
 mod templates;
+mod uninstall;
 mod util;
 
 use crate::app::{App, Config};
@@ -41,6 +42,7 @@ Comandos:
   logs [N] [-f]    Muestra las últimas N líneas del log (default 50); -f lo sigue en vivo
   config           Reejecuta el asistente de configuración
   update [versión] Descarga una release de GitHub (verifica sha256) y se reemplaza
+  uninstall        Detiene y elimina la instalación (--purge borra config y datos)
   version          Imprime la versión actual
   help             Muestra esta ayuda
 
@@ -70,6 +72,7 @@ fn main() {
         ),
         Some("update") => setup::run_self_update(arguments.get(1).map(String::as_str)),
         Some("config") => setup::run_wizard(setup::read_config_file().as_ref()),
+        Some("uninstall") => uninstall::run(&arguments[1..]),
         Some("help") | Some("--help") | Some("-h") => {
             println!("{HELP}");
             Ok(())

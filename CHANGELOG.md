@@ -1,5 +1,21 @@
 # Changelog
 
+## Sin publicar
+
+### Nuevas funcionalidades
+
+- **`tmanager uninstall`**: desinstala desde el propio binario, tanto la instalación
+  con systemd como la local. Detiene el panel, elimina servicio, binario, documentación,
+  pid y log; con `--purge` también configuración, datos, historial y el usuario
+  `tinkiva-docker`. Muestra el plan y pide confirmación (`--yes` la omite). Las apps
+  Compose y los contenedores desplegados nunca se borran.
+
+### Correcciones
+
+- El workflow de CI invocaba el smoke test con el nombre viejo del binario
+  (`tinkivadm`), por lo que el servidor nunca arrancaba. El script ahora también
+  falla de inmediato si el binario no existe o si el proceso muere antes de responder.
+
 ## 0.9.0 — 2026-08-15
 
 ### Cambio de nombre del binario

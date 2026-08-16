@@ -160,6 +160,7 @@ Si ya existe configuración, ejecutar `tmanager` a secas muestra un menú: inici
 | `tmanager logs [N] [-f]` | Últimas N líneas del log (default 50); `-f` lo sigue en vivo. |
 | `tmanager config` | Reejecuta el asistente; tus valores actuales se ofrecen como default. |
 | `tmanager update [versión]` | Descarga una release de GitHub, verifica sha256 y se reemplaza. |
+| `tmanager uninstall [--purge] [--yes]` | Detiene el panel y elimina la instalación. Ver abajo. |
 | `tmanager version` | Imprime la versión actual. |
 | `tmanager help` | Muestra todos los comandos. |
 
@@ -560,22 +561,30 @@ El repositorio de origen se puede cambiar con `TDM_UPDATE_REPO` (predeterminado:
 
 ## Desinstalar
 
-Instalación con systemd (desde el repositorio):
+El propio binario desinstala cualquiera de las dos modalidades; detecta si hay servicio systemd y actúa en consecuencia:
 
 ```bash
-sudo ./scripts/uninstall.sh              # conserva configuración e historial
-sudo ./scripts/uninstall.sh --purge      # elimina también config, historial y usuario
+sudo tmanager uninstall           # servicio, binario y docs; conserva config, datos e historial
+sudo tmanager uninstall --purge   # elimina también config, datos, historial y el usuario del sistema
+tmanager uninstall --yes          # sin confirmación (scripts y CI)
 ```
 
-Instalación directa del binario (Opción A / B1):
+Antes de tocar nada imprime la lista exacta de rutas a eliminar y las que conserva, y pide confirmación (`--yes` la omite). Sin terminal interactiva y sin `--yes` aborta sin borrar nada. Si la instalación es del sistema y no eres root, avisa para repetir con `sudo`.
 
-```bash
-tmanager stop
-sudo rm /usr/local/bin/tmanager
-rm -rf tinkiva-docker-manager   # config, pid, log, datos y apps (¡revisa antes de borrar!)
-```
+Qué hace cada modo:
 
-`/opt/tinkiva/apps` nunca se borra automáticamente para proteger tus proyectos y datos.
+| | Por omisión | `--purge` |
+|---|---|---|
+| Servicio systemd, binario, documentación | se eliminan | se eliminan |
+| `tinkiva.pid`, `tinkiva.log` | se eliminan | se eliminan |
+| Config (`tinkiva.env` o `/etc/tinkiva-docker-manager`) | se conserva | se elimina |
+| Datos e historial (`TDM_DATA_DIR`, `/var/lib/tinkiva-docker-manager`) | se conservan | se eliminan |
+| Usuario `tinkiva-docker` | se conserva | se elimina |
+| Apps Compose (`TDM_ALLOWED_ROOT`, `/opt/tinkiva/apps`) | **se conservan** | **se conservan** |
+
+Las apps nunca se borran, ni siquiera con `--purge`, aunque vivan dentro del directorio de estado (`tinkiva-docker-manager/apps`): en ese caso el directorio se vacía entrada por entrada y la carpeta `apps` queda intacta. Los contenedores y volúmenes ya desplegados tampoco se tocan; bájalos con `docker compose down` desde cada proyecto si también los quieres fuera. Un binario compilado por cargo (`target/release/tmanager`) no se elimina a sí mismo.
+
+Alternativa equivalente para instalaciones con systemd desde el repositorio: `sudo ./scripts/uninstall.sh [--purge]`.
 
 ## Estructura
 
