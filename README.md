@@ -10,6 +10,14 @@ agentes adicionales.**
 > Diseñado para administrar aplicaciones Docker sin que el propio panel termine consumiendo los
 > recursos del servidor.
 
+![Dashboard de Tinkiva Docker Manager](https://i.postimg.cc/4dhZm9nc/image.png)
+
+![Vista de Recursos](https://i.postimg.cc/MG6vMd81/image.png)
+
+![Vista de Contenedores](https://i.postimg.cc/X75xNcWD/image.png)
+
+![Vista de despliegues](https://i.postimg.cc/k4ZFqDhk/image.png)
+
 ---
 
 ## ¿Qué es Tinkiva Docker Manager?
