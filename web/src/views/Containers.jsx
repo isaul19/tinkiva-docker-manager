@@ -45,6 +45,7 @@ export function Containers() {
   const [busy, setBusy] = useState(null);
   const [logsFor, setLogsFor] = useState(null);
   const [consoleFor, setConsoleFor] = useState(null);
+  const [actionMenu, setActionMenu] = useState(null);
   const [page, setPage] = useState(0);
 
   const containers = useAsync(() => api.get('/api/containers'), [refreshToken]);
@@ -73,6 +74,23 @@ export function Containers() {
     } finally {
       setBusy(null);
     }
+  };
+
+  const toggleActionMenu = (event, container, running) => {
+    const button = event.currentTarget;
+    if (actionMenu?.container.id === container.id) {
+      setActionMenu(null);
+      return;
+    }
+    const rect = button.getBoundingClientRect();
+    const menuHeight = running ? 172 : 48;
+    const openUpward = rect.bottom + menuHeight > window.innerHeight - 12;
+    setActionMenu({
+      container,
+      running,
+      left: Math.max(12, rect.right - 160),
+      top: openUpward ? Math.max(12, rect.top - menuHeight - 6) : rect.bottom + 6,
+    });
   };
 
   return (
@@ -141,54 +159,16 @@ export function Containers() {
                         </td>
                         <td class="muted mono small">{container.ports || '—'}</td>
                         <td class="align-end">
-                          <details class="action-menu">
-                            <summary aria-label={`Acciones para ${container.name}`} title="Acciones">
-                              <MoreHorizontal size={18} />
-                            </summary>
-                            <div class="action-menu-items" role="menu">
-                              <button type="button" role="menuitem" onClick={() => setLogsFor(container.name)}>
-                                <FileText size={15} />
-                                Ver logs
-                              </button>
-                            {running ? (
-                              <>
-                                <button type="button" role="menuitem" disabled={busy === `${container.name}:console-info`} onClick={() => openConsole(container)}>
-                                  <FileTerminal size={15} />
-                                  Abrir consola
-                                </button>
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  disabled={busy === `${container.name}:restart`}
-                                  onClick={() => act(container.name, 'restart')}
-                                >
-                                  <RotateCw size={15} />
-                                  Reiniciar
-                                </button>
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  class="danger"
-                                  disabled={busy === `${container.name}:stop`}
-                                  onClick={() => act(container.name, 'stop')}
-                                >
-                                  <Square size={15} />
-                                  Detener
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                type="button"
-                                role="menuitem"
-                                disabled={busy === `${container.name}:start`}
-                                onClick={() => act(container.name, 'start')}
-                              >
-                                <Play size={15} />
-                                Arrancar
-                              </button>
-                            )}
-                            </div>
-                          </details>
+                          <button
+                            type="button"
+                            class="action-menu-trigger"
+                            aria-label={`Acciones para ${container.name}`}
+                            aria-expanded={actionMenu?.container.id === container.id}
+                            title="Acciones"
+                            onClick={(event) => toggleActionMenu(event, container, running)}
+                          >
+                            <MoreHorizontal size={18} />
+                          </button>
                         </td>
                       </tr>
                     );
@@ -210,6 +190,35 @@ export function Containers() {
         title={logsFor}
       />
       <ConsoleDialog key={consoleFor?.container.id || 'closed'} state={consoleFor} onClose={() => setConsoleFor(null)} />
+      {actionMenu ? (
+        <div class="action-menu-items action-menu-popover" role="menu" style={`left:${actionMenu.left}px; top:${actionMenu.top}px`}>
+          <button type="button" role="menuitem" onClick={() => { setActionMenu(null); setLogsFor(actionMenu.container.name); }}>
+            <FileText size={15} />
+            Ver logs
+          </button>
+          {actionMenu.running ? (
+            <>
+              <button type="button" role="menuitem" disabled={busy === `${actionMenu.container.name}:console-info`} onClick={() => { setActionMenu(null); openConsole(actionMenu.container); }}>
+                <FileTerminal size={15} />
+                Abrir consola
+              </button>
+              <button type="button" role="menuitem" disabled={busy === `${actionMenu.container.name}:restart`} onClick={() => { setActionMenu(null); act(actionMenu.container.name, 'restart'); }}>
+                <RotateCw size={15} />
+                Reiniciar
+              </button>
+              <button type="button" role="menuitem" class="danger" disabled={busy === `${actionMenu.container.name}:stop`} onClick={() => { setActionMenu(null); act(actionMenu.container.name, 'stop'); }}>
+                <Square size={15} />
+                Detener
+              </button>
+            </>
+          ) : (
+            <button type="button" role="menuitem" disabled={busy === `${actionMenu.container.name}:start`} onClick={() => { setActionMenu(null); act(actionMenu.container.name, 'start'); }}>
+              <Play size={15} />
+              Arrancar
+            </button>
+          )}
+        </div>
+      ) : null}
     </>
   );
 }
