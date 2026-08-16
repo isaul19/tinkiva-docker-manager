@@ -1,5 +1,12 @@
 # Changelog
 
+## Sin publicar
+
+### Mejoras
+
+- La consola de contenedores baja sola al ejecutar: la salida nueva queda a la vista sin
+  tener que arrastrar el scroll hasta el final.
+
 ## 0.9.1 — 2026-08-15
 
 ### Nuevas funcionalidades

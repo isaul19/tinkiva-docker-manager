@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { Container, Download, FileTerminal, FileText, MoreHorizontal, Play, RotateCw, Square } from 'lucide-preact';
 import { api } from '../lib/api.js';
 import { useApp } from '../lib/context.js';
@@ -249,6 +249,16 @@ function ConsoleDialog({ state, onClose }) {
   const [input, setInput] = useState('');
   const [output, setOutput] = useState('');
   const [busy, setBusy] = useState(false);
+  const consoleOutput = useRef(null);
+
+  // Cada ejecución deja a la vista lo que acaba de imprimirse, sin obligar a
+  // arrastrar el scroll hasta el final.
+  useEffect(() => {
+    if (consoleOutput.current) {
+      consoleOutput.current.scrollTop = consoleOutput.current.scrollHeight;
+    }
+  }, [output]);
+
   if (!state) return null;
   const { container, info } = state;
   const database = info.database;
@@ -279,7 +289,7 @@ function ConsoleDialog({ state, onClose }) {
     <Button variant="primary" type="submit" form="container-console" loading={busy}>Ejecutar</Button>
   </>}>
     <p class="muted small">Usuario: <code>{info.user}</code></p>
-    <pre class="logs console-output" tabIndex={0}>{output || 'La salida de los comandos aparecerá aquí.'}</pre>
+    <pre class="logs console-output" tabIndex={0} ref={consoleOutput}>{output || 'La salida de los comandos aparecerá aquí.'}</pre>
     <form id="container-console" onSubmit={execute}>
       <Field label={database ? 'Consulta' : 'Comando'} hint={database ? 'Admite consultas y comandos del cliente, por ejemplo \\dt en PostgreSQL.' : 'Se ejecuta con sh -lc dentro del contenedor; máximo 4096 caracteres.'}>
         {database ? (

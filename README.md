@@ -66,9 +66,9 @@ En reposo, el proceso utiliza aproximadamente:
 | ---------------------- | ---------------: |
 | Memoria privada típica | **≈ 0.7–1.2 MB** |
 | RSS observado en Linux |         ≈ 2–3 MB |
-| Binario release        |         ≈ 841 KB |
-| Frontend compilado     |         ≈ 115 KB |
-| Frontend gzip          |          ≈ 43 KB |
+| Binario release        |         ≈ 935 KB |
+| Frontend compilado     |         ≈ 156 KB |
+| Frontend gzip          |          ≈ 53 KB |
 
 La diferencia entre memoria privada y RSS se debe principalmente a páginas compartidas con el
 sistema, como `libc` y el loader de Linux.
@@ -516,21 +516,21 @@ Sin argumentos abre el menú interactivo:
 tmanager
 ```
 
-| Comando | Qué hace |
-| --- | --- |
-| `tmanager start` | Arranca el panel en segundo plano. En el primer inicio lanza el asistente de configuración. |
-| `tmanager stop` | Detiene la instancia en segundo plano (SIGTERM; fuerza `-9` si no baja). |
-| `tmanager status` | Indica si está en ejecución, con el pid y la URL del panel. |
-| `tmanager logs` | Últimas 50 líneas del log. |
-| `tmanager logs 200` | Últimas N líneas. |
-| `tmanager logs -f` | Sigue el log en vivo. |
-| `tmanager config` | Reejecuta el asistente; tus valores actuales se ofrecen como default. |
-| `tmanager token` | Imprime el token administrador, solo el token, apto para tuberías. |
-| `tmanager update` | Descarga la última release de GitHub, verifica el sha256 y se reemplaza. |
-| `tmanager update v0.9.1` | Instala una versión concreta. |
-| `tmanager uninstall` | Detiene el panel y elimina la instalación. `--purge` borra además config y datos; `--yes` omite la confirmación. |
-| `tmanager version` | Imprime la versión actual. |
-| `tmanager help` | Lista los comandos disponibles. |
+| Comando                  | Qué hace                                                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `tmanager start`         | Arranca el panel en segundo plano. En el primer inicio lanza el asistente de configuración.                      |
+| `tmanager stop`          | Detiene la instancia en segundo plano (SIGTERM; fuerza `-9` si no baja).                                         |
+| `tmanager status`        | Indica si está en ejecución, con el pid y la URL del panel.                                                      |
+| `tmanager logs`          | Últimas 50 líneas del log.                                                                                       |
+| `tmanager logs 200`      | Últimas N líneas.                                                                                                |
+| `tmanager logs -f`       | Sigue el log en vivo.                                                                                            |
+| `tmanager config`        | Reejecuta el asistente; tus valores actuales se ofrecen como default.                                            |
+| `tmanager token`         | Imprime el token administrador, solo el token, apto para tuberías.                                               |
+| `tmanager update`        | Descarga la última release de GitHub, verifica el sha256 y se reemplaza.                                         |
+| `tmanager update v0.9.1` | Instala una versión concreta.                                                                                    |
+| `tmanager uninstall`     | Detiene el panel y elimina la instalación. `--purge` borra además config y datos; `--yes` omite la confirmación. |
+| `tmanager version`       | Imprime la versión actual.                                                                                       |
+| `tmanager help`          | Lista los comandos disponibles.                                                                                  |
 
 `token` combina bien con la API:
 
@@ -861,12 +861,21 @@ Consulta [LICENSE](./LICENSE).
 
 # Asistentes de desarrollo y sus palabras
 
-Parte del desarrollo de este proyecto fue asistida por agentes de IA bajo dirección y
-revisión humana:
+Parte del desarrollo de este proyecto fue asistida por agentes de IA bajo dirección y revisión
+humana:
 
-- **GLM 5.3**: revisé casos de seguridad del panel y recomendé acceder mediante túneles
-  SSH en lugar de exponer puertos directamente, para mantener el endpoint privado y
-  reducir la superficie de ataque.
+- **GLM 5.3**: revisé casos de seguridad del panel y recomendé acceder mediante túneles SSH en lugar
+  de exponer puertos directamente, para mantener el endpoint privado y reducir la superficie de
+  ataque.
+- **Claude Opus 5**: trabajé sobre todo en la interfaz y la experiencia de uso — que las vistas se
+  lean de un vistazo, que los diálogos guíen en lugar de interrogar y que la aplicación siga hablando
+  un solo idioma. La restricción más interesante fue que nada de eso podía costar peso: la interfaz
+  entera sigue siendo un puñado de kilobytes que viajan dentro del binario. También implementé la
+  exportación SQL de bases de datos, resolviéndola con volcado a disco y envío por trozos para no
+  romper la premisa de memoria constante del panel.
+
+Ninguno de los dos sustituye el criterio de quien mantiene el proyecto: las decisiones, la revisión y
+los errores siguen siendo humanos.
 
 ---
 
