@@ -340,7 +340,7 @@ test('la vista de recursos distingue base de datos y repositorio', async () => {
 test('la vista de despliegues formatea duración y estado', async () => {
   const { text } = await mount({ token: 'x'.repeat(40), hash: '#/deployments' });
   assert.match(text, /storagia-api/);
-  assert.match(text, /success/);
+  assert.match(text, /Completado/);
   assert.match(text, /4\.2 s/);
   assert.match(text, /webhook/);
 });

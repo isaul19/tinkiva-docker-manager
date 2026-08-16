@@ -99,13 +99,12 @@ export function Processes() {
                       <td class="numeric mono">{entry.pid}</td>
                       <td>
                         <strong>{entry.name}</strong>
-                        <span class="muted block small">{entry.state}</span>
                       </td>
                       <td class="muted">{entry.user}</td>
                       <td class="numeric">{entry.cpu_percent.toFixed(1)}%</td>
                       <td class="numeric">{formatBytes(entry.memory_bytes)}</td>
-                      <td class="muted mono small truncate" title={entry.command}>
-                        {entry.command}
+                      <td class="muted mono small" title={entry.command}>
+                        <span class="command-cell">{entry.command}</span>
                       </td>
                     </tr>
                   ))}

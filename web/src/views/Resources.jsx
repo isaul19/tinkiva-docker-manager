@@ -384,17 +384,17 @@ function EnvironmentDialog({ state, busy, onClose, onSubmit }) {
   const [environment, setEnvironment] = useState(state?.environment || "");
   if (!state) return null;
   const { project, managedKeys = [] } = state;
-  return <Modal open onClose={onClose} eyebrow="CONFIGURACI├ôN" title={`Variables de ${project.name}`} description="Edita el archivo .env del recurso. Al guardar, Docker recrear├í el servicio solo si la configuraci├│n cambi├│." footer={<>
+  return <Modal open onClose={onClose} eyebrow="CONFIGURACION" title={`Variables de ${project.name}`} description="Edita el archivo .env del recurso. Al guardar, Docker recreara el servicio solo si la configuracion cambio." footer={<>
     <Button onClick={onClose}>Cancelar</Button>
     <Button variant="primary" loading={busy} onClick={() => onSubmit(project, environment)}>Guardar y aplicar</Button>
   </>}>
     <FormGrid columns={1}>
-      <Field label="Variables de entorno" hint="Una por l├¡nea, CLAVE=valor. Para borrar una variable, elimina su l├¡nea." wide>
+      <Field label="Variables de entorno" hint="Una por linea, CLAVE=valor. Para borrar una variable, elimina su linea." wide>
         <TextArea rows={10} spellcheck={false} placeholder={'NODE_ENV=production\nPORT=3000'} value={environment} onInput={(event) => setEnvironment(event.currentTarget.value)} />
       </Field>
       <div class="environment-note">
         <span>El archivo se mantiene con permisos 0600 y los valores no se escriben en el historial.</span>
-        {managedKeys.length ? <span>Gestionadas por Tinkiva y ocultas aqu├¡: <code>{managedKeys.join(", ")}</code>.</span> : null}
+        {managedKeys.length ? <span>Gestionadas por Tinkiva y ocultas aqui: <code>{managedKeys.join(", ")}</code>.</span> : null}
         {project.kind === "database" ? <span>En bases de datos, cambiar credenciales no modifica usuarios ya creados dentro de un volumen existente.</span> : null}
       </div>
     </FormGrid>

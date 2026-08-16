@@ -54,6 +54,29 @@ export function stateTone(state) {
   return 'neutral';
 }
 
+export function containerStateLabel(state) {
+  const labels = {
+    created: 'Creado',
+    restarting: 'Reiniciando',
+    running: 'En ejecucion',
+    removing: 'Eliminando',
+    paused: 'Pausado',
+    exited: 'Finalizado',
+    dead: 'Inactivo',
+  };
+  return labels[String(state || '').toLowerCase()] || state || 'Desconocido';
+}
+
+export function deploymentStatusLabel(status) {
+  const labels = {
+    success: 'Completado',
+    failed: 'Fallido',
+    running: 'En curso',
+    pending: 'Pendiente',
+  };
+  return labels[String(status || '').toLowerCase()] || status || 'Desconocido';
+}
+
 export function Spinner({ label = 'Cargando…' }) {
   return (
     <div class="state-block">
@@ -104,8 +127,8 @@ export function Pagination({ page = 0, total = 0, pageSize = 10, onPageChange })
   const end = Math.min(total, (current + 1) * pageSize);
   if (total <= pageSize) return null;
   return (
-    <div class="pagination" aria-label="Paginaci├│n">
-      <span class="muted small">{start}ÔÇô{end} de {total}</span>
+    <div class="pagination" aria-label="Paginacion">
+      <span class="muted small">{start} - {end} de {total}</span>
       <div class="pagination-actions">
         <Button size="sm" disabled={current === 0} onClick={() => onPageChange?.(current - 1)}>Anterior</Button>
         <span class="pagination-page">{current + 1} / {pages}</span>

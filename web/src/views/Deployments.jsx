@@ -4,7 +4,15 @@ import { api } from '../lib/api.js';
 import { useApp } from '../lib/context.js';
 import { useAsync } from '../lib/hooks.js';
 import { formatDateTime, formatDuration, formatRelative } from '../lib/format.js';
-import { AsyncBlock, Badge, EmptyState, Pagination, Panel, stateTone } from '../ui/Primitives.jsx';
+import {
+  AsyncBlock,
+  Badge,
+  deploymentStatusLabel,
+  EmptyState,
+  Pagination,
+  Panel,
+  stateTone,
+} from '../ui/Primitives.jsx';
 import { Select } from '../ui/Form.jsx';
 
 const PAGE_SIZE = 10;
@@ -84,7 +92,7 @@ export function Deployments() {
                             ) : null}
                           </td>
                           <td>
-                            <Badge tone={stateTone(deployment.status)}>{deployment.status}</Badge>
+                            <Badge tone={stateTone(deployment.status)}>{deploymentStatusLabel(deployment.status)}</Badge>
                           </td>
                           <td class="muted">{deployment.trigger}</td>
                           <td class="mono small truncate" title={deployment.image || ''}>

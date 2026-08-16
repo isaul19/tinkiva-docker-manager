@@ -3,7 +3,17 @@ import { api } from '../lib/api.js';
 import { useApp } from '../lib/context.js';
 import { navigate, useAsync, usePolling } from '../lib/hooks.js';
 import { formatBytes, formatDuration, formatRelative } from '../lib/format.js';
-import { AsyncBlock, Badge, Button, EmptyState, Panel, Stat, stateTone } from '../ui/Primitives.jsx';
+import {
+  AsyncBlock,
+  Badge,
+  Button,
+  containerStateLabel,
+  deploymentStatusLabel,
+  EmptyState,
+  Panel,
+  Stat,
+  stateTone,
+} from '../ui/Primitives.jsx';
 
 export function Dashboard() {
   const { info, refreshToken, openAddResource } = useApp();
@@ -103,7 +113,7 @@ export function Dashboard() {
                       <span class="muted">{container.image}</span>
                     </div>
                     <div class="compact-side">
-                      <Badge tone={stateTone(container.state)}>{container.state}</Badge>
+                      <Badge tone={stateTone(container.state)}>{containerStateLabel(container.state)}</Badge>
                       {container.memory ? <span class="muted">{container.memory}</span> : null}
                     </div>
                   </li>
@@ -143,7 +153,7 @@ export function Dashboard() {
                         {formatDuration(deployment.duration_ms)}
                       </span>
                     </div>
-                    <Badge tone={stateTone(deployment.status)}>{deployment.status}</Badge>
+                    <Badge tone={stateTone(deployment.status)}>{deploymentStatusLabel(deployment.status)}</Badge>
                   </li>
                 ))}
               </ul>

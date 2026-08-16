@@ -1676,10 +1676,12 @@ code {
 }
 
 
-/* ÔöÇÔöÇ Paginaci├│n ligera y variables de entorno ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ */
+/* Paginacion ligera y variables de entorno */
 .pagination { display:flex; align-items:center; justify-content:space-between; gap:.8rem; padding:.8rem 1rem; border-top:1px solid var(--line-soft); }
 .pagination-actions { display:flex; align-items:center; gap:.55rem; }
 .pagination-page { min-width:3.6rem; color:var(--muted); font-size:.78rem; text-align:center; font-variant-numeric:tabular-nums; }
+.command-cell { display:block; max-width:34ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .deployment-filter { width:min(100%,270px); }
 .environment-note { display:grid; gap:.35rem; padding:.75rem .85rem; border:1px solid var(--line-soft); border-radius:var(--radius-sm); background:rgba(255,255,255,.018); color:var(--faint); font-size:.74rem; line-height:1.45; }
 @media (max-width:640px) { .pagination { align-items:flex-start; flex-direction:column; } }
+@media (max-width:760px) { .command-cell { max-width:22ch; } }

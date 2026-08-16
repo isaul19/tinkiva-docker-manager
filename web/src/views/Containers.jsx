@@ -8,6 +8,7 @@ import {
   AsyncBlock,
   Badge,
   Button,
+  containerStateLabel,
   EmptyState,
   Meter,
   Pagination,
@@ -20,20 +21,6 @@ import { Field, Input, TextArea } from '../ui/Form.jsx';
 import { Modal } from '../ui/Modal.jsx';
 
 const PAGE_SIZE = 10;
-
-const STATE_LABELS = {
-  created: 'Creado',
-  restarting: 'Reiniciando',
-  running: 'En ejecución',
-  removing: 'Eliminando',
-  paused: 'Pausado',
-  exited: 'Finalizado',
-  dead: 'Inactivo',
-};
-
-function containerStateLabel(state) {
-  return STATE_LABELS[String(state).toLowerCase()] || state || 'Desconocido';
-}
 
 function containerStatusLabel(status) {
   let value = String(status || '');
