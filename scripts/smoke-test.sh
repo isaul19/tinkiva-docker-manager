@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-BINARY=${1:-target/release/tinkivadm}
+BINARY=${1:-target/release/tmanager}
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BINARY=$(realpath "$BINARY")
 TMP=$(mktemp -d)

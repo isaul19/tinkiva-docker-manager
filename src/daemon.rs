@@ -107,7 +107,7 @@ pub fn start() -> Result<(), String> {
                     println!("  Panel: http://{bind}");
                 }
                 println!("  Logs:  {}", log_file().display());
-                println!("  Detén el proceso con: tinkivadm stop");
+                println!("  Detén el proceso con: tmanager stop");
                 return Ok(());
             }
             break;

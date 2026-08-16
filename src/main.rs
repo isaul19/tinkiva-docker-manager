@@ -32,7 +32,7 @@ use std::time::Duration;
 const HELP: &str = "\
 Tinkiva Docker Manager — panel de despliegue Docker de un solo nodo
 
-Uso: tinkivadm [comando]
+Uso: tmanager [comando]
 
 Comandos:
   start            Arranca el panel en segundo plano (asistente si no hay config)
@@ -75,16 +75,16 @@ fn main() {
             Ok(())
         }
         Some("version") | Some("--version") | Some("-V") => {
-            println!("tinkivadm {}", env!("CARGO_PKG_VERSION"));
+            println!("tmanager {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some(other) => Err(format!(
-            "comando desconocido: {other}. Ejecuta tinkivadm help para ver los comandos."
+            "comando desconocido: {other}. Ejecuta tmanager help para ver los comandos."
         )),
         None => run(),
     };
     if let Err(error) = outcome {
-        eprintln!("tinkivadm: {error}");
+        eprintln!("tmanager: {error}");
         std::process::exit(1);
     }
 }

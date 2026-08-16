@@ -90,7 +90,7 @@ Funciona en `x86_64` y `aarch64/arm64` al compilar nativamente para la arquitect
 
 ## Instalación
 
-Hay dos rutas; ambas terminan con el binario `tinkivadm` listo para usar. Si solo quieres correr el panel, usa la **Opción A** (sin compilar). Si vas a modificar el código o prefieres construir tu propio binario, usa la **Opción B**.
+Hay dos rutas; ambas terminan con el binario `tmanager` listo para usar. Si solo quieres correr el panel, usa la **Opción A** (sin compilar). Si vas a modificar el código o prefieres construir tu propio binario, usa la **Opción B**.
 
 ### Opción A — Descargar el binario (recomendado)
 
@@ -103,11 +103,11 @@ curl --fail --location -O \
 curl --fail --location -O \
   "https://github.com/isaul19/tinkiva-docker-manager/releases/latest/download/tinkiva-docker-manager-linux-${ARCH}"
 sha256sum -c "tinkiva-docker-manager-linux-${ARCH}.sha256" \
-  && sudo install -m 0755 "tinkiva-docker-manager-linux-${ARCH}" /usr/local/bin/tinkivadm
-tinkivadm start
+  && sudo install -m 0755 "tinkiva-docker-manager-linux-${ARCH}" /usr/local/bin/tmanager
+tmanager start
 ```
 
-`tinkivadm start` abre el asistente de primera ejecución (token, directorios y puerto) y deja el panel corriendo en segundo plano.
+`tmanager start` abre el asistente de primera ejecución (token, directorios y puerto) y deja el panel corriendo en segundo plano.
 
 ### Opción B — Compilar desde el código
 
@@ -119,21 +119,21 @@ cd tinkiva-docker-manager
 ./scripts/build-release.sh
 ```
 
-`build-release.sh` ejecuta clippy, tests y el build release; el binario queda en `target/release/tinkivadm`. El perfil release prioriza tamaño: `opt-level = "z"`, LTO completo, un codegen unit, símbolos removidos y `panic = "abort"`. El detalle de las comprobaciones está en [`VALIDATION.md`](VALIDATION.md).
+`build-release.sh` ejecuta clippy, tests y el build release; el binario queda en `target/release/tmanager`. El perfil release prioriza tamaño: `opt-level = "z"`, LTO completo, un codegen unit, símbolos removidos y `panic = "abort"`. El detalle de las comprobaciones está en [`VALIDATION.md`](VALIDATION.md).
 
 Desde aquí tienes dos alternativas:
 
 ```bash
 # B1 — Uso directo con el asistente (igual que la Opción A)
-./target/release/tinkivadm start
+./target/release/tmanager start
 
 # B2 — Instalar como servicio systemd (usuario dedicado, arranque automático)
-sudo ./scripts/install.sh target/release/tinkivadm
+sudo ./scripts/install.sh target/release/tmanager
 ```
 
 ### Primer arranque con asistente
 
-Al ejecutar `tinkivadm` sin `TDM_ADMIN_TOKEN`, sin variables de entorno y sin archivo `tinkiva.env`, se abre un asistente interactivo en la terminal:
+Al ejecutar `tmanager` sin `TDM_ADMIN_TOKEN`, sin variables de entorno y sin archivo `tinkiva.env`, se abre un asistente interactivo en la terminal:
 
 ```text
 ? Token administrador:
@@ -147,21 +147,21 @@ Al ejecutar `tinkivadm` sin `TDM_ADMIN_TOKEN`, sin variables de entorno y sin ar
 
 Enter acepta el valor por defecto. Al terminar, el asistente escribe `tinkiva.env` (permisos `0600`) con `TDM_BIND`, `TDM_ADMIN_TOKEN`, `TDM_DATA_DIR` y `TDM_ALLOWED_ROOT`, muestra el token una sola vez y arranca el servidor. En los siguientes arranques el archivo se lee automáticamente; las variables de entorno tienen prioridad sobre él. La ruta del archivo puede cambiarse con `TDM_CONFIG_FILE`. En modo no interactivo (sin stdin, p. ej. systemd sin `EnvironmentFile`) el asistente se omite y se exige `TDM_ADMIN_TOKEN`.
 
-Si ya existe configuración, ejecutar `tinkivadm` a secas muestra un menú: iniciar en segundo plano / iniciar en primer plano / volver a configurar / actualizar / salir.
+Si ya existe configuración, ejecutar `tmanager` a secas muestra un menú: iniciar en segundo plano / iniciar en primer plano / volver a configurar / actualizar / salir.
 
 ### Comandos del binario
 
 | Comando | Uso |
 |---|---|
-| `tinkivadm` | Menú interactivo con config existente; primer plano en el primer uso. |
-| `tinkivadm start` | Arranca el panel en segundo plano (asistente si no hay config). Logs en `tinkiva-docker-manager/tinkiva.log`. |
-| `tinkivadm stop` | Detiene la instancia en segundo plano (SIGTERM; fuerza `-9` si no baja). |
-| `tinkivadm status` | Muestra si está en ejecución, el pid y la URL del panel. |
-| `tinkivadm logs [N] [-f]` | Últimas N líneas del log (default 50); `-f` lo sigue en vivo. |
-| `tinkivadm config` | Reejecuta el asistente; tus valores actuales se ofrecen como default. |
-| `tinkivadm update [versión]` | Descarga una release de GitHub, verifica sha256 y se reemplaza. |
-| `tinkivadm version` | Imprime la versión actual. |
-| `tinkivadm help` | Muestra todos los comandos. |
+| `tmanager` | Menú interactivo con config existente; primer plano en el primer uso. |
+| `tmanager start` | Arranca el panel en segundo plano (asistente si no hay config). Logs en `tinkiva-docker-manager/tinkiva.log`. |
+| `tmanager stop` | Detiene la instancia en segundo plano (SIGTERM; fuerza `-9` si no baja). |
+| `tmanager status` | Muestra si está en ejecución, el pid y la URL del panel. |
+| `tmanager logs [N] [-f]` | Últimas N líneas del log (default 50); `-f` lo sigue en vivo. |
+| `tmanager config` | Reejecuta el asistente; tus valores actuales se ofrecen como default. |
+| `tmanager update [versión]` | Descarga una release de GitHub, verifica sha256 y se reemplaza. |
+| `tmanager version` | Imprime la versión actual. |
+| `tmanager help` | Muestra todos los comandos. |
 
 Sin systemd, el binario gestiona su propio demonio. Todo vive dentro de `tinkiva-docker-manager/` en el directorio donde lo ejecutes: `tinkiva-docker-manager/tinkiva.env` (config), `tinkiva-docker-manager/tinkiva.pid` (proceso) y `tinkiva-docker-manager/tinkiva.log` (salida), junto a `data` y `apps`. Al terminar el asistente se ofrecen a borrar los binarios descargados residuales (`tinkiva-docker-manager-linux-*`), y una carpeta `tinkiva/` de versiones anteriores se renombra automáticamente a `tinkiva-docker-manager/`.
 
@@ -170,7 +170,7 @@ Sin systemd, el binario gestiona su propio demonio. Todo vive dentro de `tinkiva
 `install.sh` crea usuario dedicado, directorios endurecidos y la unidad systemd. Queda:
 
 ```text
-/usr/local/bin/tinkivadm
+/usr/local/bin/tmanager
 /etc/tinkiva-docker-manager/env
 /etc/systemd/system/tinkiva-docker-manager.service
 /var/lib/tinkiva-docker-manager/
@@ -198,7 +198,7 @@ El repositorio incluye un Docker CLI simulado y un smoke test del ciclo completo
 
 ```bash
 cargo build --release
-./scripts/smoke-test.sh target/release/tinkivadm
+./scripts/smoke-test.sh target/release/tmanager
 ```
 
 Valida healthcheck y autenticación, métricas del host, listado de contenedores y logs, registro de proyecto, dos despliegues con imágenes inmutables, rollback, historial y creación de la plantilla PostgreSQL.
@@ -551,8 +551,8 @@ Consulta también [SECURITY.md](SECURITY.md).
 El binario incluye un actualizador que descarga la última release de GitHub, verifica su suma sha256 y se reemplaza a sí mismo (requiere `curl` y `sha256sum`):
 
 ```bash
-sudo tinkivadm update        # última versión
-sudo tinkivadm update v0.1.2 # versión concreta
+sudo tmanager update        # última versión
+sudo tmanager update v0.1.2 # versión concreta
 sudo systemctl restart tinkiva-docker-manager   # solo si usas systemd
 ```
 
@@ -570,8 +570,8 @@ sudo ./scripts/uninstall.sh --purge      # elimina también config, historial y 
 Instalación directa del binario (Opción A / B1):
 
 ```bash
-tinkivadm stop
-sudo rm /usr/local/bin/tinkivadm
+tmanager stop
+sudo rm /usr/local/bin/tmanager
 rm -rf tinkiva-docker-manager   # config, pid, log, datos y apps (¡revisa antes de borrar!)
 ```
 

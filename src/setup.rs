@@ -338,7 +338,7 @@ fn replace_executable(downloaded: &Path, executable: &Path) -> io::Result<()> {
     let name = executable
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("tinkivadm");
+        .unwrap_or("tmanager");
     let staged = parent.join(format!(".{name}.update-{}", unique_suffix()));
 
     let result = (|| {
@@ -542,7 +542,7 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("tdm-update-test-{}", unique_suffix()));
         fs::create_dir(&directory).unwrap();
         let downloaded = directory.join("downloaded");
-        let executable = directory.join("tinkivadm");
+        let executable = directory.join("tmanager");
         fs::write(&downloaded, b"version nueva").unwrap();
         fs::write(&executable, b"version anterior").unwrap();
 

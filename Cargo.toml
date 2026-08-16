@@ -8,7 +8,7 @@ license = "MIT"
 authors = ["Tinkiva"]
 
 [[bin]]
-name = "tinkivadm"
+name = "tmanager"
 path = "src/main.rs"
 
 # Intencionalmente sin dependencias externas: menor RAM, binario pequeño y build reproducible.

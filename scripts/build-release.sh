@@ -5,5 +5,5 @@ cd "$ROOT"
 cargo clippy --all-targets
 cargo test
 cargo build --release
-printf 'Binario: %s\n' "$ROOT/target/release/tinkivadm"
-ls -lh "$ROOT/target/release/tinkivadm"
+printf 'Binario: %s\n' "$ROOT/target/release/tmanager"
+ls -lh "$ROOT/target/release/tmanager"

@@ -11,7 +11,7 @@ Todas se ejecutaron sobre Linux x86_64 con Rust 1.97.1 y Node 22.
 | Análisis estático de Rust | `cargo clippy --all-targets` | Sin errores |
 | Pruebas unitarias de Rust | `cargo test` | 44/44 correctas |
 | Compilación optimizada | `cargo build --release` | Binario de 841 KB |
-| Ciclo completo de la API | `./scripts/smoke-test.sh target/release/tinkivadm` | Correcto |
+| Ciclo completo de la API | `./scripts/smoke-test.sh target/release/tmanager` | Correcto |
 | Empaquetado de la interfaz | `npm run build` (en `web/`) | 115 KB, 43 KB gzip |
 | Render de la interfaz | `npm test` (en `web/`) | 11/11 correctas |
 
@@ -92,7 +92,7 @@ cd web && npm ci && npm test && cd ..
 cargo clippy --all-targets
 cargo test
 cargo build --release
-./scripts/smoke-test.sh target/release/tinkivadm
+./scripts/smoke-test.sh target/release/tmanager
 ```
 
 `.github/workflows/ci.yml` ejecuta exactamente estas comprobaciones, y además falla si
