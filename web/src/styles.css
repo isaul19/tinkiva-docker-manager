@@ -522,10 +522,76 @@ code {
   text-decoration: underline;
 }
 
-.row-actions {
-  display: inline-flex;
-  gap: 0.35rem;
-  justify-content: flex-end;
+.action-menu {
+  position: relative;
+  display: inline-block;
+  text-align: left;
+}
+
+.action-menu summary {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  cursor: pointer;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--muted);
+  background: var(--surface-2);
+}
+
+.action-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.action-menu summary:hover,
+.action-menu[open] summary {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.action-menu-items {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  display: grid;
+  min-width: 155px;
+  padding: 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.action-menu-items button {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.action-menu-items button:hover {
+  background: var(--surface-2);
+}
+
+.action-menu-items button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.action-menu-items button.danger {
+  color: var(--danger);
 }
 
 /* ── Paneles y tarjetas ─────────────────────────────────────────────────── */

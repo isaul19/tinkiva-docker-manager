@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { Container, FileTerminal, FileText, Play, RotateCw, Square } from 'lucide-preact';
+import { Container, FileTerminal, FileText, MoreHorizontal, Play, RotateCw, Square } from 'lucide-preact';
 import { api } from '../lib/api.js';
 import { useApp } from '../lib/context.js';
 import { useAsync, usePolling } from '../lib/hooks.js';
@@ -141,41 +141,54 @@ export function Containers() {
                         </td>
                         <td class="muted mono small">{container.ports || '—'}</td>
                         <td class="align-end">
-                          <div class="row-actions">
-                            <Button
-                              size="sm"
-                              icon={FileText}
-                              onClick={() => setLogsFor(container.name)}
-                              title="Ver logs"
-                            />
+                          <details class="action-menu">
+                            <summary aria-label={`Acciones para ${container.name}`} title="Acciones">
+                              <MoreHorizontal size={18} />
+                            </summary>
+                            <div class="action-menu-items" role="menu">
+                              <button type="button" role="menuitem" onClick={() => setLogsFor(container.name)}>
+                                <FileText size={15} />
+                                Ver logs
+                              </button>
                             {running ? (
                               <>
-                                <Button size="sm" icon={FileTerminal} loading={busy === `${container.name}:console-info`} onClick={() => openConsole(container)} title="Abrir consola" />
-                                <Button
-                                  size="sm"
-                                  icon={RotateCw}
-                                  loading={busy === `${container.name}:restart`}
+                                <button type="button" role="menuitem" disabled={busy === `${container.name}:console-info`} onClick={() => openConsole(container)}>
+                                  <FileTerminal size={15} />
+                                  Abrir consola
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  disabled={busy === `${container.name}:restart`}
                                   onClick={() => act(container.name, 'restart')}
-                                  title="Reiniciar"
-                                />
-                                <Button
-                                  size="sm"
-                                  icon={Square}
-                                  loading={busy === `${container.name}:stop`}
+                                >
+                                  <RotateCw size={15} />
+                                  Reiniciar
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  class="danger"
+                                  disabled={busy === `${container.name}:stop`}
                                   onClick={() => act(container.name, 'stop')}
-                                  title="Detener"
-                                />
+                                >
+                                  <Square size={15} />
+                                  Detener
+                                </button>
                               </>
                             ) : (
-                              <Button
-                                size="sm"
-                                icon={Play}
-                                loading={busy === `${container.name}:start`}
+                              <button
+                                type="button"
+                                role="menuitem"
+                                disabled={busy === `${container.name}:start`}
                                 onClick={() => act(container.name, 'start')}
-                                title="Arrancar"
-                              />
+                              >
+                                <Play size={15} />
+                                Arrancar
+                              </button>
                             )}
-                          </div>
+                            </div>
+                          </details>
                         </td>
                       </tr>
                     );
