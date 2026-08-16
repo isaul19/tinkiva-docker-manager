@@ -300,6 +300,9 @@ impl App {
             ("GET", ["api", "containers", container, "logs"]) => {
                 self.container_logs(container, request)
             }
+            ("GET", ["api", "containers", container, "console"]) => {
+                self.container_console_info(container)
+            }
             ("POST", ["api", "containers", container, "console"]) => {
                 self.container_console(container, request)
             }
@@ -714,15 +717,40 @@ impl App {
         }
     }
 
-    /// Ejecuta un comando no interactivo dentro de un contenedor en ejecución.
-    /// La consola web nunca ejecuta comandos en el host.
+    fn container_console_info(&self, container: &str) -> Response {
+        match self.docker.container_console_info(container) {
+            Ok(info) => Response::json(
+                200,
+                format!(
+                    "{{\"database\":{},\"database_label\":{},\"user\":{}}}",
+                    info.database.map_or_else(|| "null".to_owned(), json_string),
+                    info.database
+                        .map(database_label)
+                        .map_or_else(|| "null".to_owned(), json_string),
+                    json_string(&info.user),
+                ),
+            ),
+            Err(error) => json_error(400, &error),
+        }
+    }
+
+    /// Ejecuta una consulta en bases de datos detectadas o un comando no
+    /// interactivo en los demás contenedores. Nunca se ejecuta nada en el host.
     fn container_console(&self, container: &str, request: &Request) -> Response {
         let fields = match request.form() {
             Ok(fields) => fields,
             Err(error) => return json_error(400, &error),
         };
-        let command = fields.get("command").map_or("", String::as_str);
-        match self.docker.container_exec(container, command) {
+        let input = fields.get("input").map_or("", String::as_str);
+        let info = match self.docker.container_console_info(container) {
+            Ok(info) => info,
+            Err(error) => return json_error(400, &error),
+        };
+        let result = match info.database {
+            Some(database) => self.docker.database_query(container, database, input),
+            None => self.docker.container_exec(container, input),
+        };
+        match result {
             Ok(result) => {
                 let mut output = result.stdout;
                 if !result.stderr.trim().is_empty() {
@@ -2224,6 +2252,17 @@ fn validate_compose_text(compose: &str) -> Result<(), String> {
         return Err("el Compose contiene caracteres no válidos".to_owned());
     }
     Ok(())
+}
+
+fn database_label(database: &str) -> &'static str {
+    match database {
+        "postgres" => "PostgreSQL",
+        "mysql" => "MySQL",
+        "mariadb" => "MariaDB",
+        "mongodb" => "MongoDB",
+        "redis" => "Redis",
+        _ => "Base de datos",
+    }
 }
 
 fn query_u64(request: &Request, name: &str) -> Option<u64> {

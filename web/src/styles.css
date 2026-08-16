@@ -1487,6 +1487,10 @@ code {
   width: min(100%, 800px);
 }
 
+.modal-xl {
+  width: min(100%, 1080px);
+}
+
 .modal-head {
   display: flex;
   align-items: flex-start;
@@ -1537,6 +1541,12 @@ code {
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.console-output {
+  min-height: 20rem;
+  max-height: 45vh;
+  margin: 0.75rem 0 1rem;
 }
 
 /* ── Avisos flotantes ───────────────────────────────────────────────────── */

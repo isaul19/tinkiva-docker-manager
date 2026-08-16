@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { Boxes, FilePenLine, FileText, Github, Layers, Rocket, Settings2, Trash2, Undo2, Webhook } from "lucide-preact";
 import { api } from "../lib/api.js";
 import { useApp } from "../lib/context.js";
@@ -38,7 +38,7 @@ function ResourceIcon({ project }) {
 }
 
 export function Resources() {
-  const { refreshToken, openAddResource, refresh } = useApp();
+  const { refreshToken, refresh } = useApp();
   const toast = useToast();
   const [logsFor, setLogsFor] = useState(null);
   const [deployFor, setDeployFor] = useState(null);
@@ -134,15 +134,9 @@ export function Resources() {
 
   return (
     <>
-      <div class="section-head">
-        <p class="muted">
-          Bases de datos, imágenes y repositorios gestionados por el panel, más los stacks Compose
-          que registraste a mano.
-        </p>
-        <Button variant="primary" onClick={openAddResource}>
-          Añadir recurso
-        </Button>
-      </div>
+      <p class="page-intro muted">
+        Bases de datos, imágenes, repositorios y Docker Compose gestionados por el panel.
+      </p>
 
       <AsyncBlock
         query={projects}
@@ -151,12 +145,7 @@ export function Resources() {
             <EmptyState
               icon={Boxes}
               title="Sin recursos"
-              description="Empieza por una base de datos, una imagen de Docker Hub o un repositorio de GitHub."
-              action={
-                <Button variant="primary" onClick={openAddResource}>
-                  Añadir recurso
-                </Button>
-              }
+              description="Usa «Añadir recurso» en el encabezado para crear una base de datos, imagen, repositorio o Docker Compose."
             />
           </Panel>
         }
@@ -415,6 +404,12 @@ function EnvironmentDialog({ state, busy, onClose, onSubmit }) {
 function DeleteDialog({ project, busy, onClose, onConfirm }) {
   const [mode, setMode] = useState("stack");
   const [confirmation, setConfirmation] = useState("");
+  // El diálogo sigue montado al cerrarse; sin este reset el siguiente recurso
+  // heredaría la opción y el texto de confirmación anteriores.
+  useEffect(() => {
+    setMode("stack");
+    setConfirmation("");
+  }, [project?.slug]);
   if (!project) return null;
 
   const needsConfirmation = mode === "all";

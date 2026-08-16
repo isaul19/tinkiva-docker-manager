@@ -7,7 +7,6 @@ import { Button } from '../ui/Primitives.jsx';
 import { DatabaseForm } from './DatabaseForm.jsx';
 import { ImageForm } from './ImageForm.jsx';
 import { RepositoryForm } from './RepositoryForm.jsx';
-import { ComposeForm } from './ComposeForm.jsx';
 import { ComposeTextForm } from './ComposeTextForm.jsx';
 import { ResultPanel } from './ResultPanel.jsx';
 
@@ -35,17 +34,10 @@ const TYPES = [
   },
   {
     id: 'compose-text',
-    title: 'Pegar Docker Compose',
+    title: 'Crear Docker Compose',
     description: 'Pega un docker-compose.yml, guárdalo como recurso y edítalo después.',
     icon: <Layers size={24} />,
     form: ComposeTextForm,
-  },
-  {
-    id: 'compose',
-    title: 'Compose existente',
-    description: 'Registra un compose.yaml que ya está en la raíz permitida.',
-    icon: <Layers size={24} />,
-    form: ComposeForm,
   },
 ];
 

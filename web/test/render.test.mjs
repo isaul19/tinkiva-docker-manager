@@ -389,8 +389,8 @@ test('«Añadir recurso» ofrece los orígenes Compose', async () => {
   assert.match(text, /Base de datos/);
   assert.match(text, /Imagen de Docker Hub/);
   assert.match(text, /Repositorio de GitHub/);
-  assert.match(text, /Compose existente/);
-  assert.match(text, /Pegar Docker Compose/);
+  assert.doesNotMatch(text, /Compose existente/);
+  assert.match(text, /Crear Docker Compose/);
 });
 
 test('el paso de base de datos pinta los motores del catálogo', async () => {

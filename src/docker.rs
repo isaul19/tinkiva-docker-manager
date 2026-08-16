@@ -60,6 +60,14 @@ pub struct ContainerInfo {
     pub pids: Option<String>,
 }
 
+/// Información puntual para decidir la experiencia de consola. Se calcula al
+/// abrirla; no se guarda ni mantiene procesos en segundo plano.
+#[derive(Debug, Clone)]
+pub struct ConsoleInfo {
+    pub database: Option<&'static str>,
+    pub user: String,
+}
+
 impl ContainerInfo {
     pub fn to_json(&self) -> String {
         format!(
@@ -275,8 +283,98 @@ impl DockerClient {
         if command.trim().is_empty() || command.len() > 4096 || command.contains('\0') {
             return Err("comando inválido o demasiado largo".to_owned());
         }
+        // El comando llega como argumento posicional para que sus caracteres no
+        // se interpolen en el script de shell que ejecuta Docker.
         self.run(
-            ["exec", container, "sh", "-lc", command],
+            ["exec", container, "sh", "-lc", "sh -lc \"$1\" 2>&1 | head -c 1048576", "tdm", command],
+            None,
+            Duration::from_secs(60),
+        )
+    }
+
+    /// Inspecciona señales estáticas y prueba clientes en el contenedor activo.
+    /// Son comandos cortos bajo demanda; no se crea ningún servicio residente.
+    pub fn container_console_info(&self, container: &str) -> Result<ConsoleInfo, String> {
+        if !valid_container_ref(container) {
+            return Err("identificador de contenedor inválido".to_owned());
+        }
+        let separator = FIELD_SEPARATOR;
+        let format = format!(
+            "{{{{.Config.Image}}}}{separator}{{{{.Config.User}}}}{separator}{{{{.Path}}}} {{{{join .Args \" \"}}}}{separator}{{{{json .NetworkSettings.Ports}}}}"
+        );
+        let inspect = self.run(
+            ["inspect", "--format", &format, container],
+            None,
+            Duration::from_secs(10),
+        )?;
+        if !inspect.success {
+            return Err(inspect.summary());
+        }
+        let fields = inspect.stdout.trim().split(separator).collect::<Vec<_>>();
+        let image = fields.first().copied().unwrap_or_default().to_ascii_lowercase();
+        let configured_user = fields.get(1).copied().unwrap_or_default();
+        let command = fields.get(2).copied().unwrap_or_default().to_ascii_lowercase();
+        let ports = fields.get(3).copied().unwrap_or_default().to_ascii_lowercase();
+
+        let env = self.run(
+            ["inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", container],
+            None,
+            Duration::from_secs(10),
+        )?;
+        if !env.success {
+            return Err(env.summary());
+        }
+        let environment = env.stdout.to_ascii_uppercase();
+
+        let probe = self.run(
+            [
+                "exec",
+                container,
+                "sh",
+                "-lc",
+                "printf 'USER='; id -un 2>/dev/null || true; for c in psql mysql mariadb mongosh redis-cli; do command -v \"$c\" >/dev/null 2>&1 && printf '\\n%s=1' \"$c\"; done; printf '\\n'",
+            ],
+            None,
+            Duration::from_secs(10),
+        )?;
+        let probe_text = probe.stdout.to_ascii_lowercase();
+        let user = probe
+            .stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("USER="))
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(configured_user)
+            .trim();
+
+        Ok(ConsoleInfo {
+            database: detect_database(&image, &environment, &ports, &command, &probe_text),
+            user: if user.is_empty() { "root".to_owned() } else { user.to_owned() },
+        })
+    }
+
+    /// Ejecuta una consulta usando el cliente instalado dentro de la base de
+    /// datos. La consulta se pasa como `$1`, sin interpolarla en el script.
+    pub fn database_query(
+        &self,
+        container: &str,
+        database: &str,
+        query: &str,
+    ) -> Result<CommandResult, String> {
+        if !valid_container_ref(container) {
+            return Err("identificador de contenedor inválido".to_owned());
+        }
+        if query.trim().is_empty() || query.len() > 4096 || query.contains('\0') {
+            return Err("consulta inválida o demasiado larga".to_owned());
+        }
+        let script = match database {
+            "postgres" => "psql -v ON_ERROR_STOP=1 -U \"${POSTGRES_USER:-postgres}\" -d \"${POSTGRES_DB:-postgres}\" -c \"$1\" 2>&1 | head -c 1048576",
+            "mysql" | "mariadb" => "client=$(command -v mariadb || command -v mysql) || exit 127; user=\"${MYSQL_USER:-${MARIADB_USER:-root}}\"; database=\"${MYSQL_DATABASE:-${MARIADB_DATABASE:-}}\"; password=\"${MYSQL_PASSWORD:-${MARIADB_PASSWORD:-${MYSQL_ROOT_PASSWORD:-${MARIADB_ROOT_PASSWORD:-}}}}\"; [ -z \"$password\" ] || export MYSQL_PWD=\"$password\"; if [ -n \"$database\" ]; then \"$client\" -u \"$user\" \"$database\" -e \"$1\"; else \"$client\" -u \"$user\" -e \"$1\"; fi 2>&1 | head -c 1048576",
+            "mongodb" => "if [ -n \"${MONGO_INITDB_ROOT_USERNAME:-}\" ]; then mongosh --quiet -u \"$MONGO_INITDB_ROOT_USERNAME\" -p \"${MONGO_INITDB_ROOT_PASSWORD:-}\" --authenticationDatabase admin --eval \"$1\"; else mongosh --quiet --eval \"$1\"; fi 2>&1 | head -c 1048576",
+            "redis" => "if [ -n \"${REDIS_PASSWORD:-}\" ]; then printf '%s\\n' \"$1\" | redis-cli --no-auth-warning -a \"$REDIS_PASSWORD\" --raw; else printf '%s\\n' \"$1\" | redis-cli --raw; fi 2>&1 | head -c 1048576",
+            _ => return Err("motor de base de datos no soportado".to_owned()),
+        };
+        self.run(
+            ["exec", container, "sh", "-lc", script, "tdm-query", query],
             None,
             Duration::from_secs(60),
         )
@@ -538,6 +636,47 @@ fn summarize_project_status(output: &str) -> &'static str {
     }
 }
 
+fn detect_database(
+    image: &str,
+    environment: &str,
+    ports: &str,
+    command: &str,
+    clients: &str,
+) -> Option<&'static str> {
+    let signals = |needles: &[&str]| -> usize {
+        needles
+            .iter()
+            .map(|needle| {
+                usize::from(
+                    image.contains(needle)
+                        || environment.contains(&needle.to_ascii_uppercase())
+                        || ports.contains(needle)
+                        || command.contains(needle)
+                        || clients.contains(needle),
+                )
+            })
+            .sum()
+    };
+
+    // MariaDB se evalúa antes que MySQL: ambos suelen incluir el cliente mysql.
+    if signals(&["mariadb", "mariadb_", "3306", "mariadb=1"]) >= 2 {
+        return Some("mariadb");
+    }
+    if signals(&["postgres", "postgres_", "5432", "psql=1"]) >= 2 {
+        return Some("postgres");
+    }
+    if signals(&["mysql", "mysql_", "3306", "mysql=1"]) >= 2 {
+        return Some("mysql");
+    }
+    if signals(&["mongo", "mongo_initdb", "27017", "mongosh=1"]) >= 2 {
+        return Some("mongodb");
+    }
+    if signals(&["redis", "redis_password", "6379", "redis-cli=1"]) >= 2 {
+        return Some("redis");
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,6 +706,22 @@ mod tests {
                 "running{separator}healthy{separator}0\nexited{separator}{separator}0\n"
             )),
             "error"
+        );
+    }
+
+    #[test]
+    fn detects_databases_from_combined_signals() {
+        assert_eq!(
+            detect_database("postgres:16", "POSTGRES_DB=app", "5432/tcp", "postgres", "psql=1"),
+            Some("postgres")
+        );
+        assert_eq!(
+            detect_database("node:22", "", "", "node server.js", ""),
+            None
+        );
+        assert_eq!(
+            detect_database("mariadb:11", "MARIADB_DATABASE=app", "3306/tcp", "mariadbd", "mariadb=1"),
+            Some("mariadb")
         );
     }
 }

@@ -16,7 +16,7 @@ import {
 } from '../ui/Primitives.jsx';
 import { useToast } from '../ui/Toast.jsx';
 import { LogsDialog } from './LogsDialog.jsx';
-import { Field, Input } from '../ui/Form.jsx';
+import { Field, Input, TextArea } from '../ui/Form.jsx';
 import { Modal } from '../ui/Modal.jsx';
 
 const PAGE_SIZE = 10;
@@ -69,6 +69,18 @@ export function Containers() {
       const result = await api.post(`/api/containers/${encodeURIComponent(name)}/${action}`);
       toast.success(result.message || `${action} aplicado a ${name}`);
       containers.reload();
+    } catch (error) {
+      toast.error(error);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const openConsole = async (container) => {
+    setBusy(`${container.name}:console-info`);
+    try {
+      const info = await api.get(`/api/containers/${encodeURIComponent(container.name)}/console`);
+      setConsoleFor({ container, info });
     } catch (error) {
       toast.error(error);
     } finally {
@@ -151,7 +163,7 @@ export function Containers() {
                             />
                             {running ? (
                               <>
-                                <Button size="sm" icon={FileTerminal} onClick={() => setConsoleFor(container)} title="Abrir consola" />
+                                <Button size="sm" icon={FileTerminal} loading={busy === `${container.name}:console-info`} onClick={() => openConsole(container)} title="Abrir consola" />
                                 <Button
                                   size="sm"
                                   icon={RotateCw}
@@ -197,42 +209,54 @@ export function Containers() {
         target={logsFor}
         title={logsFor}
       />
-      <ConsoleDialog container={consoleFor} onClose={() => setConsoleFor(null)} />
+      <ConsoleDialog key={consoleFor?.container.id || 'closed'} state={consoleFor} onClose={() => setConsoleFor(null)} />
     </>
   );
 }
 
-function ConsoleDialog({ container, onClose }) {
-  const [command, setCommand] = useState('');
+function ConsoleDialog({ state, onClose }) {
+  const [input, setInput] = useState('');
   const [output, setOutput] = useState('');
   const [busy, setBusy] = useState(false);
-  if (!container) return null;
+  if (!state) return null;
+  const { container, info } = state;
+  const database = info.database;
+  const prompt = '>';
 
   const execute = async (event) => {
     event.preventDefault();
-    if (!command.trim()) return;
-    const submitted = command;
+    if (!input.trim()) return;
+    const submitted = input;
     setBusy(true);
     try {
-      const result = await api.post(`/api/containers/${encodeURIComponent(container.name)}/console`, { command: submitted });
-      setOutput((current) => `${current}${current ? '\n' : ''}$ ${submitted}\n${result.output || '(sin salida)'}\n`);
-      setCommand('');
+      const result = await api.post(`/api/containers/${encodeURIComponent(container.name)}/console`, { input: submitted });
+      setOutput((current) => `${current}${current ? '\n' : ''}${prompt} ${submitted}\n${result.output || '(sin salida)'}\n`);
+      setInput('');
     } catch (error) {
-      setOutput((current) => `${current}${current ? '\n' : ''}$ ${submitted}\nError: ${error.message}\n`);
+      setOutput((current) => `${current}${current ? '\n' : ''}${prompt} ${submitted}\nError: ${error.message}\n`);
     } finally {
       setBusy(false);
     }
   };
 
-  return <Modal open onClose={onClose} eyebrow="CONSOLA" title={container.name} description="Ejecuta comandos dentro de este contenedor. No da acceso a la terminal del host." size="lg" footer={<>
+  const description = database
+    ? `${info.database_label} detectado. Ejecuta consultas con el cliente disponible dentro del contenedor.`
+    : 'Shell del contenedor. Ejecuta comandos dentro de este contenedor, nunca en el host.';
+
+  return <Modal open onClose={onClose} eyebrow="CONSOLA" title={container.name} description={description} size="xl" footer={<>
     <Button onClick={onClose}>Cerrar</Button>
     <Button variant="primary" type="submit" form="container-console" loading={busy}>Ejecutar</Button>
   </>}>
+    <p class="muted small">Usuario: <code>{info.user}</code></p>
+    <pre class="logs console-output" tabIndex={0}>{output || 'La salida de los comandos aparecerá aquí.'}</pre>
     <form id="container-console" onSubmit={execute}>
-      <Field label="Comando" hint="Se ejecuta con sh -lc dentro del contenedor; máximo 4096 caracteres.">
-        <Input value={command} onInput={(event) => setCommand(event.currentTarget.value)} placeholder="ls -la /" autofocus />
+      <Field label={database ? 'Consulta' : 'Comando'} hint={database ? 'Admite consultas y comandos del cliente, por ejemplo \\dt en PostgreSQL.' : 'Se ejecuta con sh -lc dentro del contenedor; máximo 4096 caracteres.'}>
+        {database ? (
+          <TextArea rows={6} value={input} onInput={(event) => setInput(event.currentTarget.value)} placeholder={database === 'postgres' ? 'SELECT * FROM products LIMIT 10;' : 'Escribe una consulta'} autofocus />
+        ) : (
+          <Input value={input} onInput={(event) => setInput(event.currentTarget.value)} placeholder="npm run db:migrate" autofocus />
+        )}
       </Field>
     </form>
-    <pre class="logs console-output" tabIndex={0}>{output || 'La salida de los comandos aparecerá aquí.'}</pre>
   </Modal>;
 }

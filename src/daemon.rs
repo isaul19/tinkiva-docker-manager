@@ -1,8 +1,8 @@
 use crate::setup;
-use std::fs::{self, OpenOptions};
+use std::fs::{ self, OpenOptions };
 use std::io;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::{ Path, PathBuf };
+use std::process::{ Command, Stdio };
 use std::thread;
 use std::time::Duration;
 
@@ -25,11 +25,7 @@ pub fn is_serve_invocation(argument: Option<&String>) -> bool {
 }
 
 fn read_pid() -> Option<u32> {
-    fs::read_to_string(pid_file())
-        .ok()?
-        .trim()
-        .parse()
-        .ok()
+    fs::read_to_string(pid_file()).ok()?.trim().parse().ok()
 }
 
 fn is_alive(pid: u32) -> bool {
@@ -47,14 +43,15 @@ pub fn clear_pid() {
 pub fn start() -> Result<(), String> {
     if let Some(pid) = read_pid() {
         if is_alive(pid) {
-            return Err(format!(
-                "ya hay una instancia en ejecución (pid {pid}). Ejecuta stop primero."
-            ));
+            return Err(
+                format!("ya hay una instancia en ejecución (pid {pid}). Ejecuta stop primero.")
+            );
         }
     }
     clear_pid();
 
-    let executable = std::env::current_exe()
+    let executable = std::env
+        ::current_exe()
         .map_err(|error| format!("no se pudo determinar la ruta del binario: {error}"))?;
     let log = OpenOptions::new()
         .create(true)
@@ -81,9 +78,9 @@ pub fn start() -> Result<(), String> {
                 .append(true)
                 .open(log_file())
                 .map_err(|error| format!("no se pudo abrir {}: {error}", log_file().display()))?;
-            let plain_err = plain_log.try_clone().map_err(|error| {
-                format!("no se pudo duplicar el descriptor de log: {error}")
-            })?;
+            let plain_err = plain_log
+                .try_clone()
+                .map_err(|error| { format!("no se pudo duplicar el descriptor de log: {error}") })?;
             Command::new(&executable)
                 .arg(SERVE_FLAG)
                 .stdin(Stdio::null())
@@ -93,10 +90,12 @@ pub fn start() -> Result<(), String> {
         }
     };
     if spawned.is_err() {
-        return Err(format!(
-            "no se pudo iniciar el proceso en segundo plano; revisa {}",
-            log_file().display()
-        ));
+        return Err(
+            format!(
+                "no se pudo iniciar el proceso en segundo plano; revisa {}",
+                log_file().display()
+            )
+        );
     }
 
     for _ in 0..50 {
@@ -114,11 +113,13 @@ pub fn start() -> Result<(), String> {
             break;
         }
     }
-    Err(format!(
-        "la instancia no llegó a arrancar. Última línea del log: {} (revisa {})",
-        last_log_line().unwrap_or_else(|| "sin salida".to_owned()),
-        log_file().display()
-    ))
+    Err(
+        format!(
+            "la instancia no llegó a arrancar. Última línea del log: {} (revisa {})",
+            last_log_line().unwrap_or_else(|| "sin salida".to_owned()),
+            log_file().display()
+        )
+    )
 }
 
 fn last_log_line() -> Option<String> {
@@ -153,9 +154,7 @@ pub fn stop() -> Result<(), String> {
         .status()
         .map_err(|error| format!("no se pudo ejecutar kill: {error}"))?;
     if !status.success() {
-        return Err(format!(
-            "no se pudo detener el pid {pid} (¿permisos?). Usa: sudo kill {pid}"
-        ));
+        return Err(format!("no se pudo detener el pid {pid} (¿permisos?). Usa: sudo kill {pid}"));
     }
 
     for _ in 0..50 {
