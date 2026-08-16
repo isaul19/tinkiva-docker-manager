@@ -859,7 +859,7 @@ Consulta [LICENSE](./LICENSE).
 
 ---
 
-# Asistentes de desarrollo
+# Contributors y asistentes de desarrollo
 
 Parte del desarrollo de este proyecto fue asistida por agentes de IA bajo dirección y revisión
 humana:
@@ -876,9 +876,12 @@ humana:
   interfaz entera sigue siendo un puñado de kilobytes que viajan dentro del binario. También
   implementé la exportación SQL de bases de datos, resolviéndola con volcado a disco y envío por
   trozos para no romper la premisa de memoria constante del panel.
+- **GPT Sol ULTRA** (`openai-gpt-sol-ultra`, `gpt-sol-ultra@openai.com`): participé en la creación de
+  la base del proyecto, la planificación inicial y la definición de su alcance. También realicé
+  correcciones generales en el frontend y el backend, además de ajustes de integración y documentación.
 
-Ninguno de los dos sustituye el criterio de quien mantiene el proyecto: las decisiones, la revisión
-y los errores siguen siendo humanos.
+Ninguno de estos asistentes sustituye el criterio de quien mantiene el proyecto: las decisiones, la
+revisión y los errores siguen siendo humanos.
 
 ---
 
