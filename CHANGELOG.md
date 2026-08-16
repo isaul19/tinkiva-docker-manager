@@ -10,10 +10,13 @@
   primitivas que ya existían en `crypto`: **no añade dependencias ni exige el CLI de `aws`**
   en el servidor. La contraseña viaja por `--password-stdin`, nunca por `argv`, y las
   credenciales se guardan con permisos 0600.
-- **«Imagen de Amazon ECR» como origen en «Añadir recurso»**, habilitado solo cuando hay
-  credenciales guardadas (y con el motivo escrito en la tarjeta cuando no las hay). Abre el
-  formulario de Compose con el host del registro ya puesto y la imagen a vigilar apuntando a
-  la misma etiqueta, que es todo lo que hace falta para que redespliegue en cada push del CI.
+- **«Imagen de Amazon ECR» como origen en «Añadir recurso»**, con formulario propio y
+  habilitado solo cuando hay credenciales guardadas (con el motivo escrito en la tarjeta
+  cuando no las hay). Eliges repositorio y etiqueta de una lista —el panel las pide a AWS con
+  `DescribeRepositories` y `DescribeImages`, mostrando cuándo se subió cada una y cuánto pesa—
+  y el Compose lo genera el servidor con el mismo endurecimiento que los demás recursos: red
+  propia, `no-new-privileges`, puerto en loopback salvo que pidas lo contrario y `mem_limit`
+  opcional. **Aquí no se pega YAML**; para eso sigue estando «Crear Docker Compose».
 - **Auto-deploy desde cualquier registro para recursos Compose**: el formulario acepta una
   «imagen a vigilar» opcional y el watcher compara su digest cada ronda, redesplegando cuando
   el registro publica una versión nueva. Funciona con ECR, GHCR o Docker Hub.
@@ -42,6 +45,10 @@
 - La política de ejemplo de ECR limitaba las acciones de descarga a un único repositorio, que
   no es lo normal: ahora usa `"*"` y explica cómo acotarla si alguien lo quiere. El
   formulario tampoco pide ya el ID de cuenta, porque era opcional y el propio token lo dice.
+- El campo «Imagen a vigilar» del formulario de Compose prometía más de lo que cumplía. Ahora
+  se llama «Redesplegar cuando cambie una imagen» y dice la verdad: con imágenes públicas
+  funciona sin más, y un registro privado que no sea el ECR conectado necesita un
+  `docker login` hecho a mano en el servidor.
 - **`stop` no encontraba el panel** cuando la configuración estaba suelta en la raíz
   (`./tinkiva.env`, el layout anterior a 0.9). En ese caso la raíz de estado es el propio
   directorio de trabajo, así que el archivo pid coincidía con el «pid heredado» que la
@@ -49,6 +56,9 @@
   que no había instancia, dejando el proceso vivo y fuera de control. La limpieza ahora
   respeta el pid en uso y nunca borra el de un proceso que sigue corriendo, así que `start`
   también vuelve a avisar en lugar de levantar un segundo panel encima.
+- Un campo deshabilitado se veía exactamente igual que uno editable: no había ningún estilo
+  para `input:disabled`. Se notaba al marcar «Sin límite de RAM», que apagaba el campo de MB
+  sin que nada lo indicara.
 - El resumen de la vista de imágenes quedaba pegado a los bordes del panel y la casilla
   «Solo sin usar» se salía por la derecha.
 

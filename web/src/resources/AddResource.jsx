@@ -7,6 +7,7 @@ import { Button } from '../ui/Primitives.jsx';
 import { DatabaseForm } from './DatabaseForm.jsx';
 import { RepositoryForm } from './RepositoryForm.jsx';
 import { ComposeTextForm } from './ComposeTextForm.jsx';
+import { EcrForm } from './EcrForm.jsx';
 import { ResultPanel } from './ResultPanel.jsx';
 
 const TYPES = [
@@ -27,9 +28,9 @@ const TYPES = [
   {
     id: 'ecr',
     title: 'Imagen de Amazon ECR',
-    description: 'Despliega una imagen privada de tu registro y redespliégala sola en cada push.',
+    description: 'Elige un repositorio y una etiqueta de tu registro privado; el Compose lo genera el panel.',
     icon: <Cloud size={24} />,
-    form: ComposeTextForm,
+    form: EcrForm,
   },
   {
     id: 'compose-text',
@@ -93,7 +94,7 @@ export function AddResource({ open, onClose, onCreated }) {
       {result ? (
         <ResultPanel result={result} />
       ) : selected ? (
-        <Form onCreated={setResult} registry={type === 'ecr' ? info?.ecr_registry : ''} />
+        <Form onCreated={setResult} />
       ) : (
         <div class="type-grid">
           {TYPES.map((entry) => {

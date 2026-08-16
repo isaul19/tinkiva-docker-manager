@@ -260,7 +260,10 @@ async function mount({ token = null, hash = '#/dashboard', api = {} } = {}) {
   const fetchStub = async (path) => {
     calls.push(path);
     const [base] = String(path).split('?');
-    const body = base in api ? api[base] : API[base];
+    // Se busca primero la ruta completa: hay endpoints cuya respuesta depende
+    // del query string, como el listado de repositorios de ECR.
+    const key = String(path) in api ? String(path) : base;
+    const body = key in api ? api[key] : API[base];
     if (body === undefined) {
       return {
         ok: false,
@@ -514,11 +517,30 @@ test('el origen de ECR se bloquea mientras no haya credenciales', async () => {
   assert.match(card.textContent, /Conecta Amazon ECR primero/);
 });
 
-test('con ECR conectado el origen se habilita y trae el registro escrito', async () => {
+test('con ECR conectado se eligen repositorio y etiqueta de una lista', async () => {
   const registry = '123456789012.dkr.ecr.us-east-1.amazonaws.com';
   const app = await mount({
     token: 'x'.repeat(40),
-    api: { '/api/info': { ...API['/api/info'], ecr_registry: registry } },
+    api: {
+      '/api/info': { ...API['/api/info'], ecr_registry: registry },
+      '/api/ecr/repositories': { repositories: ['api', 'web'] },
+      '/api/ecr/repositories?repository=api': {
+        tags: [
+          {
+            tag: 'latest',
+            image: `${registry}/api:latest`,
+            pushed_at: 1_750_000_000,
+            size_bytes: 104_857_600,
+          },
+          {
+            tag: 'sha-a1b2c3',
+            image: `${registry}/api:sha-a1b2c3`,
+            pushed_at: 1_740_000_000,
+            size_bytes: 104_000_000,
+          },
+        ],
+      },
+    },
   });
   await app.click('button', 'Añadir recurso');
 
@@ -526,15 +548,27 @@ test('con ECR conectado el origen se habilita y trae el registro escrito', async
   assert.ok(!card.disabled, 'con credenciales la tarjeta se habilita');
 
   await app.click('.type-card', 'Imagen de Amazon ECR');
-  const compose = app.document.querySelector('textarea');
-  assert.ok(compose, 'el formulario de compose debe abrirse');
-  assert.match(compose.value, new RegExp(`${registry}/mi-imagen:latest`), 'host ya escrito');
+  assert.match(app.currentText(), /api/, 'debe listar los repositorios del registro');
 
-  const watched = [...app.document.querySelectorAll('input')].map((node) => node.value);
+  await app.click('.repo-results button', 'api');
   assert.ok(
-    watched.some((value) => value === `${registry}/mi-imagen:latest`),
-    'la imagen vigilada debe apuntar a la misma etiqueta',
+    app.calls.some((path) => path.includes('repository=api')),
+    'al elegir un repositorio se piden sus etiquetas',
   );
+
+  const options = [...app.document.querySelectorAll('option')].map((node) => node.textContent);
+  assert.ok(
+    options.some((label) => label.startsWith('latest')),
+    'la etiqueta más reciente encabeza la lista',
+  );
+  assert.ok(
+    options.some((label) => label.includes('100 MB')),
+    'cada etiqueta muestra su peso',
+  );
+
+  const text = app.currentText();
+  assert.doesNotMatch(text, /docker-compose\.yml/, 'este formulario no pide YAML');
+  assert.match(text, /Puerto del contenedor/, 'sí pide cómo exponerlo');
 });
 
 test('el menú de un contenedor de base de datos abre el diálogo de exportación', async () => {

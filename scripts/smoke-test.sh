@@ -191,6 +191,11 @@ curl -fsS "${AUTH[@]}" "$BASE/api/ecr" | jq -e '.connected == false' >/dev/null
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/ecr" \
   --data-urlencode 'access_key_id=AKIAIOSFODNN7EXAMPLE' --data-urlencode 'secret_access_key=x' \
   --data-urlencode 'region=US-EAST-1')" == '422' ]]
+# Sin registro conectado no se puede listar ni crear un recurso de ECR.
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$BASE/api/ecr/repositories")" == '502' ]]
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/ecr" \
+  --data-urlencode 'slug=demo-imagen' --data-urlencode 'name=Demo imagen' \
+  --data-urlencode 'image=123456789012.dkr.ecr.us-east-1.amazonaws.com/api:latest')" == '422' ]]
 
 # Un recurso Compose puede declarar la imagen que debe vigilar el watcher.
 curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/compose" \

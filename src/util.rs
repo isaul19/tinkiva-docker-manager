@@ -117,6 +117,12 @@ pub fn valid_display_name(value: &str) -> bool {
         && !trimmed.contains('\r') && !trimmed.contains('\n') && !trimmed.contains('\0')
 }
 
+/// Un arreglo JSON de cadenas, ya escapadas.
+pub fn json_string_array(values: &[String]) -> String {
+    let items: Vec<String> = values.iter().map(|value| json_string(value)).collect();
+    format!("[{}]", items.join(","))
+}
+
 pub fn json_string(value: &str) -> String {
     let mut output = String::with_capacity(value.len() + 2);
     output.push('"');

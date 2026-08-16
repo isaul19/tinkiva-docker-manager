@@ -411,6 +411,77 @@ pub fn repository(request: &RepositoryRequest) -> GeneratedResource {
     }
 }
 
+pub struct RegistryImageRequest<'a> {
+    pub slug: &'a str,
+    pub image: &'a str,
+    pub container_port: Option<u16>,
+    pub published_port: Option<u16>,
+    pub external_access: bool,
+    pub memory_mb: u32,
+    pub environment: &'a [(String, String)],
+}
+
+/// Servicio que solo descarga una imagen ya construida fuera del servidor.
+///
+/// La imagen va por `${APP_IMAGE}` igual que en los repositorios: así el
+/// rollback puede reescribir esa variable sin tocar el Compose, y el watcher
+/// tiene un único sitio del que leer qué etiqueta vigilar.
+pub fn registry_image(request: &RegistryImageRequest) -> GeneratedResource {
+    let host = request.slug.to_owned();
+    let bind = if request.external_access { "0.0.0.0" } else { "127.0.0.1" };
+    let ports = match (request.published_port, request.container_port) {
+        (Some(published), Some(container)) => {
+            format!("    ports:\n      - \"{bind}:{published}:{container}\"\n")
+        }
+        _ => String::new(),
+    };
+
+    let compose = format!(
+        concat!(
+            "# Generado por Tinkiva Docker Manager desde {image}.\n",
+            "services:\n",
+            "  app:\n",
+            "    image: ${{APP_IMAGE}}\n",
+            "    container_name: {host}\n",
+            "    restart: unless-stopped\n",
+            "    env_file:\n",
+            "      - .env\n",
+            "{ports}",
+            "    networks:\n",
+            "      - {network}\n",
+            "{memory_limit}",
+            "    security_opt:\n",
+            "      - no-new-privileges:true\n",
+            "\nnetworks:\n",
+            "  {network}:\n",
+            "    external: true\n"
+        ),
+        image = request.image,
+        host = host,
+        ports = ports,
+        network = SHARED_NETWORK,
+        memory_limit = memory_limit_line(request.memory_mb),
+    );
+
+    let mut env = format!("APP_IMAGE={}\n", request.image);
+    env.push_str(&memory_env(request.memory_mb));
+    for (key, value) in request.environment {
+        env.push_str(&format!("{key}={value}\n"));
+    }
+
+    let connection_uri = request
+        .published_port
+        .map_or_else(String::new, |port| format!("http://127.0.0.1:{port}"));
+
+    GeneratedResource {
+        compose,
+        env,
+        image: request.image.to_owned(),
+        host,
+        connection_uri,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +498,41 @@ mod tests {
             external_access: false,
             memory_mb: 512,
         })
+    }
+
+    #[test]
+    fn a_registry_image_keeps_the_hardening_and_stays_on_loopback() {
+        let image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/api:latest";
+        let generated = registry_image(&RegistryImageRequest {
+            slug: "api",
+            image,
+            container_port: Some(8080),
+            published_port: Some(3000),
+            external_access: false,
+            memory_mb: 256,
+            environment: &[("NODE_ENV".to_owned(), "production".to_owned())],
+        });
+
+        assert!(generated.compose.contains("image: ${APP_IMAGE}"));
+        assert!(generated.compose.contains("\"127.0.0.1:3000:8080\""));
+        assert!(generated.compose.contains("no-new-privileges:true"));
+        assert!(generated.compose.contains("restart: unless-stopped"));
+        assert!(generated.env.contains(&format!("APP_IMAGE={image}")));
+        assert!(generated.env.contains("NODE_ENV=production"));
+        assert_eq!(generated.image, image, "es la imagen que vigila el watcher");
+
+        // Sin puerto publicado no se expone nada al host.
+        let internal = registry_image(&RegistryImageRequest {
+            slug: "worker",
+            image,
+            container_port: None,
+            published_port: None,
+            external_access: false,
+            memory_mb: 0,
+            environment: &[],
+        });
+        assert!(!internal.compose.contains("ports:"));
+        assert!(!internal.compose.contains("mem_limit"));
     }
 
     #[test]

@@ -17,10 +17,14 @@ use std::sync::Mutex;
 
 const ALGORITHM: &str = "AWS4-HMAC-SHA256";
 const SERVICE: &str = "ecr";
-const TARGET: &str = "AmazonEC2ContainerRegistry_V20150921.GetAuthorizationToken";
+const API_PREFIX: &str = "AmazonEC2ContainerRegistry_V20150921";
 const CONTENT_TYPE: &str = "application/x-amz-json-1.1";
 /// Los tokens de ECR duran 12 h; se renuevan antes para no pillar el borde.
 const TOKEN_MARGIN_SECONDS: u64 = 600;
+/// Techos deliberados: el panel presume de memoria constante, así que ni las
+/// respuestas de AWS ni las listas que se mandan al navegador crecen sin freno.
+const MAX_REPOSITORIES: usize = 100;
+const MAX_TAGS: usize = 30;
 
 #[derive(Clone, Debug, Default)]
 pub struct EcrCredentials {
@@ -125,9 +129,7 @@ impl Ecr {
 
     /// Token vigente, pidiendo uno nuevo solo si el anterior está por caducar.
     pub fn token(&self) -> Result<EcrToken, String> {
-        let credentials = self
-            .credentials()?
-            .ok_or_else(|| "todavía no has conectado ECR".to_owned())?;
+        let credentials = self.require_credentials()?;
 
         if let Ok(guard) = self.token.lock() {
             if let Some(token) = guard.as_ref() {
@@ -148,6 +150,25 @@ impl Ecr {
             .lock()
             .map_err(|_| "el estado de ECR quedó bloqueado".to_owned())? = Some(token);
         Ok(())
+    }
+
+    /// Repositorios del registro, para poblar el desplegable del formulario.
+    pub fn repositories(&self) -> Result<Vec<String>, String> {
+        request_repositories(&self.require_credentials()?)
+    }
+
+    /// Etiquetas de un repositorio. Se piden solo al elegirlo: consultarlas
+    /// todas de golpe serían tantas llamadas a AWS como repositorios haya.
+    pub fn tags(&self, repository: &str) -> Result<Vec<EcrTag>, String> {
+        if !valid_repository_name(repository) {
+            return Err("nombre de repositorio inválido".to_owned());
+        }
+        request_tags(&self.require_credentials()?, repository)
+    }
+
+    fn require_credentials(&self) -> Result<EcrCredentials, String> {
+        self.credentials()?
+            .ok_or_else(|| "todavía no has conectado ECR".to_owned())
     }
 
     pub fn status_json(&self) -> Result<String, String> {
@@ -194,8 +215,8 @@ fn registry_id_from(endpoint: &str) -> String {
         .to_owned()
 }
 
-/// Pide a ECR un token de acceso de doce horas.
-fn request_token(credentials: &EcrCredentials) -> Result<EcrToken, String> {
+/// Firma y envía una operación de la API de ECR, devolviendo el cuerpo crudo.
+fn call(credentials: &EcrCredentials, operation: &str, body: &str) -> Result<String, String> {
     if !valid_region(&credentials.region) {
         return Err("región de AWS inválida".to_owned());
     }
@@ -203,15 +224,15 @@ fn request_token(credentials: &EcrCredentials) -> Result<EcrToken, String> {
         return Err("faltan el access key id y su secret".to_owned());
     }
 
+    let target = format!("{API_PREFIX}.{operation}");
     let host = format!("api.ecr.{}.amazonaws.com", credentials.region);
-    let body = "{}";
     let timestamp = now_unix();
     let amz_date = amz_date(timestamp);
     let date = amz_date[..8].to_owned();
 
     let signed_headers = "content-type;host;x-amz-date;x-amz-target";
     let canonical_headers = format!(
-        "content-type:{CONTENT_TYPE}\nhost:{host}\nx-amz-date:{amz_date}\nx-amz-target:{TARGET}\n"
+        "content-type:{CONTENT_TYPE}\nhost:{host}\nx-amz-date:{amz_date}\nx-amz-target:{target}\n"
     );
     let canonical_request = format!(
         "POST\n/\n\n{canonical_headers}\n{signed_headers}\n{}",
@@ -232,17 +253,22 @@ fn request_token(credentials: &EcrCredentials) -> Result<EcrToken, String> {
     let response = fetch(
         &Outbound::post(format!("https://{host}/"), body)
             .header(format!("Content-Type: {CONTENT_TYPE}"))
-            .header(format!("X-Amz-Target: {TARGET}"))
+            .header(format!("X-Amz-Target: {target}"))
             .header(format!("X-Amz-Date: {amz_date}"))
             .header(format!("Authorization: {authorization}"))
-            .max_bytes(64 * 1024),
+            .max_bytes(256 * 1024),
     )?;
 
     if response.status != 200 {
         return Err(describe_error(&response.body, response.status));
     }
+    Ok(response.body)
+}
 
-    let parsed = Json::parse(&response.body).map_err(|_| "ECR devolvió un JSON inválido".to_owned())?;
+/// Pide a ECR un token de acceso de doce horas.
+fn request_token(credentials: &EcrCredentials) -> Result<EcrToken, String> {
+    let body = call(credentials, "GetAuthorizationToken", "{}")?;
+    let parsed = Json::parse(&body).map_err(|_| "ECR devolvió un JSON inválido".to_owned())?;
     let entry = parsed
         .get("authorizationData")
         .and_then(Json::as_array)
@@ -269,6 +295,81 @@ fn request_token(credentials: &EcrCredentials) -> Result<EcrToken, String> {
         registry: registry.trim_start_matches("https://").to_owned(),
         expires_at,
     })
+}
+
+/// Una etiqueta publicada en un repositorio, con lo justo para elegirla.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EcrTag {
+    pub tag: String,
+    pub pushed_at: u64,
+    pub size_bytes: u64,
+}
+
+/// Nombres de los repositorios del registro conectado, en orden alfabético.
+fn request_repositories(credentials: &EcrCredentials) -> Result<Vec<String>, String> {
+    let body = call(
+        credentials,
+        "DescribeRepositories",
+        &format!("{{\"maxResults\":{MAX_REPOSITORIES}}}"),
+    )?;
+    parse_repositories(&body)
+}
+
+fn parse_repositories(body: &str) -> Result<Vec<String>, String> {
+    let parsed = Json::parse(body).map_err(|_| "ECR devolvió un JSON inválido".to_owned())?;
+    let mut names: Vec<String> = parsed
+        .array("repositories")
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|entry| entry.string("repositoryName"))
+        .map(str::to_owned)
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
+/// Etiquetas de un repositorio, de la más reciente a la más antigua.
+///
+/// `DescribeImages` devuelve una entrada por *imagen*, no por etiqueta: una
+/// imagen puede llevar varias (`latest` y el sha del commit, por ejemplo) y las
+/// que ya no tienen ninguna —las que el CI dejó huérfanas— llegan sin lista.
+fn request_tags(credentials: &EcrCredentials, repository: &str) -> Result<Vec<EcrTag>, String> {
+    let body = call(
+        credentials,
+        "DescribeImages",
+        &format!(
+            "{{\"repositoryName\":{},\"maxResults\":100}}",
+            json_string(repository)
+        ),
+    )?;
+    parse_tags(&body)
+}
+
+fn parse_tags(body: &str) -> Result<Vec<EcrTag>, String> {
+    let parsed = Json::parse(body).map_err(|_| "ECR devolvió un JSON inválido".to_owned())?;
+
+    let mut tags = Vec::new();
+    for detail in parsed.array("imageDetails").unwrap_or_default() {
+        // `imagePushedAt` llega como epoch en segundos y con decimales, así que
+        // `as_u64` (que exige un entero exacto) lo descartaría.
+        let pushed_at = match detail.get("imagePushedAt") {
+            Some(Json::Number(value)) if *value >= 0.0 => *value as u64,
+            _ => 0,
+        };
+        let size_bytes = detail.number("imageSizeInBytes").unwrap_or(0);
+        for tag in detail.array("imageTags").unwrap_or_default() {
+            if let Some(tag) = tag.as_str() {
+                tags.push(EcrTag {
+                    tag: tag.to_owned(),
+                    pushed_at,
+                    size_bytes,
+                });
+            }
+        }
+    }
+    tags.sort_by(|left, right| right.pushed_at.cmp(&left.pushed_at).then(left.tag.cmp(&right.tag)));
+    tags.truncate(MAX_TAGS);
+    Ok(tags)
 }
 
 /// Traduce los errores típicos de AWS a algo accionable.
@@ -370,6 +471,22 @@ pub fn valid_registry_id(value: &str) -> bool {
     value.is_empty() || (value.len() <= 32 && value.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+/// Nombre de repositorio tal y como lo acepta ECR: minúsculas, dígitos y los
+/// separadores `. _ - /`, siempre empezando y terminando en alfanumérico. Se
+/// valida antes de firmar porque acaba dentro del cuerpo de la petición.
+pub fn valid_repository_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (2..=256).contains(&value.len())
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+        && !value.contains("..")
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b'-' | b'/')
+        })
+}
+
 fn serialize(credentials: &EcrCredentials) -> String {
     format!(
         "access_key_id={}\nsecret_access_key={}\nregion={}\nregistry_id={}\nconnected_at={}\n",
@@ -448,6 +565,46 @@ mod tests {
     fn masks_the_access_key() {
         assert_eq!(mask_key("AKIAIOSFODNN7EXAMPLE"), "****MPLE");
         assert_eq!(mask_key("abc"), "****");
+    }
+
+    #[test]
+    fn lists_repositories_in_alphabetical_order() {
+        let body = r#"{"repositories":[
+            {"repositoryName":"web","repositoryUri":"1.dkr.ecr.us-east-1.amazonaws.com/web"},
+            {"repositoryName":"api","repositoryUri":"1.dkr.ecr.us-east-1.amazonaws.com/api"}
+        ]}"#;
+        assert_eq!(parse_repositories(body).unwrap(), vec!["api", "web"]);
+        assert!(parse_repositories("{}").unwrap().is_empty());
+    }
+
+    #[test]
+    fn expands_every_tag_of_an_image_and_orders_by_push_date() {
+        // Una imagen con dos etiquetas, otra más vieja y una huérfana sin
+        // ninguna: así es como responde ECR cuando el CI reetiqueta `latest`.
+        let body = r#"{"imageDetails":[
+            {"imageTags":["latest","sha-b2"],"imagePushedAt":1750000000.25,"imageSizeInBytes":1048576},
+            {"imageTags":["sha-a1"],"imagePushedAt":1740000000.0,"imageSizeInBytes":1000},
+            {"imagePushedAt":1730000000.0,"imageSizeInBytes":500}
+        ]}"#;
+
+        let tags = parse_tags(body).unwrap();
+        let names: Vec<&str> = tags.iter().map(|entry| entry.tag.as_str()).collect();
+        assert_eq!(names, vec!["latest", "sha-b2", "sha-a1"]);
+        assert_eq!(tags[0].pushed_at, 1_750_000_000, "el decimal se trunca");
+        assert_eq!(tags[0].size_bytes, 1_048_576);
+    }
+
+    #[test]
+    fn validates_repository_names() {
+        assert!(valid_repository_name("api"));
+        assert!(valid_repository_name("equipo/calculator-back"));
+        assert!(valid_repository_name("app_1.2"));
+        assert!(!valid_repository_name("a"), "ECR exige al menos dos caracteres");
+        assert!(!valid_repository_name("API"), "solo minúsculas");
+        assert!(!valid_repository_name("/api"));
+        assert!(!valid_repository_name("api/"));
+        assert!(!valid_repository_name("../etc/passwd"));
+        assert!(!valid_repository_name("api\",\"maxResults\":1"));
     }
 
     #[test]

@@ -12,7 +12,8 @@ use crate::proc::CommandResult;
 use crate::store::Store;
 use crate::templates::{self, GeneratedResource};
 use crate::util::{
-    atomic_write, canonical_existing_within, constant_time_eq, json_string, now_unix, random_hex,
+    atomic_write, canonical_existing_within, constant_time_eq, json_string, json_string_array,
+    now_unix, random_hex,
     read_env_value, remove_env_key, set_env_value, unique_suffix, valid_container_ref,
     valid_db_identifier, valid_display_name, valid_env_key, valid_image_ref, valid_schema_name,
     valid_slug,
@@ -360,6 +361,7 @@ impl App {
             ("GET", ["api", "ecr"]) => self.ecr_status(),
             ("POST", ["api", "ecr"]) => self.ecr_connect(request),
             ("DELETE", ["api", "ecr"]) => self.ecr_disconnect(),
+            ("GET", ["api", "ecr", "repositories"]) => self.ecr_repositories(request),
 
             ("GET", ["api", "github"]) => self.github_status(request),
             ("DELETE", ["api", "github"]) => self.github_disconnect(),
@@ -373,6 +375,7 @@ impl App {
             ("POST", ["api", "resources", "database"]) => self.create_database(request, None),
             ("POST", ["api", "resources", "repository"]) => self.create_repository_service(request),
             ("POST", ["api", "resources", "compose"]) => self.create_compose_text_resource(request),
+            ("POST", ["api", "resources", "ecr"]) => self.create_ecr_resource(request),
             // Ruta histórica: equivale a crear una base de datos PostgreSQL.
             ("POST", ["api", "templates", "postgres"]) => {
                 self.create_database(request, Some("postgres"))
@@ -1741,6 +1744,46 @@ impl App {
         }
     }
 
+    /// Lista el registro conectado. Sin `?repository=` devuelve los nombres de
+    /// los repositorios; con él, las etiquetas de ese repositorio.
+    ///
+    /// Se piden en dos pasos a propósito: pedir las etiquetas de todos al abrir
+    /// el formulario serían tantas llamadas firmadas a AWS como repositorios
+    /// tenga la cuenta.
+    fn ecr_repositories(&self, request: &Request) -> Response {
+        if !self.capabilities.curl {
+            return json_error(503, "curl no está instalado; no se puede hablar con AWS");
+        }
+        match request.query.get("repository").map(String::as_str) {
+            None | Some("") => match self.ecr.repositories() {
+                Ok(names) => Response::json(
+                    200,
+                    format!("{{\"repositories\":{}}}", json_string_array(&names)),
+                ),
+                Err(error) => json_error(502, &error),
+            },
+            Some(repository) => match self.ecr.tags(repository) {
+                Ok(tags) => {
+                    let registry = self.ecr_registry_host();
+                    let items: Vec<String> = tags
+                        .iter()
+                        .map(|entry| {
+                            format!(
+                                "{{\"tag\":{},\"image\":{},\"pushed_at\":{},\"size_bytes\":{}}}",
+                                json_string(&entry.tag),
+                                json_string(&format!("{registry}/{repository}:{}", entry.tag)),
+                                entry.pushed_at,
+                                entry.size_bytes,
+                            )
+                        })
+                        .collect();
+                    Response::json(200, format!("{{\"tags\":[{}]}}", items.join(",")))
+                }
+                Err(error) => json_error(502, &error),
+            },
+        }
+    }
+
     /// Guarda las credenciales solo si sirven: primero pide el token a AWS y
     /// hace el `docker login`. Así el usuario se entera del error de permisos
     /// aquí y no meses después, en mitad de un despliegue.
@@ -2279,6 +2322,98 @@ impl App {
                 branch: Some(branch.to_owned()),
                 image_env: Some("APP_IMAGE".to_owned()),
                 current_image: Some(generated.image.clone()),
+                auto_deploy: field(&fields, "auto_deploy") != "false",
+                generated,
+            },
+            None,
+            published_port,
+            external_access,
+        )
+    }
+
+    /// Crea un recurso a partir de una imagen del ECR conectado.
+    ///
+    /// El Compose lo genera el panel, no el usuario: así la imagen privada llega
+    /// con el mismo endurecimiento que los demás recursos (red propia,
+    /// `no-new-privileges`, puerto en loopback salvo que se pida lo contrario) y
+    /// con `auto_deploy`, que es el motivo de conectar ECR.
+    fn create_ecr_resource(&self, request: &Request) -> Response {
+        if let Err(error) = self.require_docker_compose() {
+            return json_error(503, &error);
+        }
+        let fields = match request.form() {
+            Ok(fields) => fields,
+            Err(error) => return json_error(400, &error),
+        };
+        let slug = field(&fields, "slug");
+        let name = field(&fields, "name");
+        let image = field(&fields, "image");
+        if !valid_slug(slug) {
+            return json_error(422, "slug inválido; usa minúsculas, números y guiones");
+        }
+        if !valid_display_name(name) {
+            return json_error(422, "nombre inválido");
+        }
+        if !valid_image_ref(image) {
+            return json_error(422, "referencia de imagen inválida");
+        }
+        // Solo imágenes del registro conectado: para cualquier otra no sabríamos
+        // autenticarnos y el despliegue fallaría en el primer pull.
+        if !self.ecr.owns_image(image) {
+            return json_error(422, "esa imagen no pertenece al registro de ECR conectado");
+        }
+
+        let container_port = match parse_port(&fields, "container_port") {
+            Ok(port) => port,
+            Err(error) => return json_error(422, &error),
+        };
+        let mut published_port = match parse_port(&fields, "published_port") {
+            Ok(port) => port,
+            Err(error) => return json_error(422, &error),
+        };
+        if published_port.is_none() {
+            published_port = container_port;
+        }
+        if published_port.is_some() && container_port.is_none() {
+            return json_error(422, "indica el puerto interno para publicar el servicio");
+        }
+        let memory_mb = parse_memory_mb(&fields, 512);
+        let environment = match parse_environment(field(&fields, "environment")) {
+            Ok(environment) => environment,
+            Err(error) => return json_error(422, &error),
+        };
+        let external_access = field(&fields, "external_access") == "true";
+
+        // El login se renueva antes de crear nada: si las credenciales ya no
+        // valen, es mejor fallar aquí que dejar un recurso a medio desplegar.
+        self.ensure_registry_login(Some(image));
+
+        let directory = match self.prepare_directory(slug) {
+            Ok(directory) => directory,
+            Err(error) => return json_error(error.status, &error.message),
+        };
+        let generated = templates::registry_image(&templates::RegistryImageRequest {
+            slug,
+            image,
+            container_port,
+            published_port,
+            external_access,
+            memory_mb,
+            environment: &environment,
+        });
+
+        self.finish_resource(
+            &directory,
+            NewResource {
+                slug: slug.to_owned(),
+                name: name.trim().to_owned(),
+                kind: KIND_IMAGE,
+                engine: None,
+                repository: None,
+                installation_id: None,
+                branch: None,
+                image_env: Some("APP_IMAGE".to_owned()),
+                current_image: Some(image.to_owned()),
                 auto_deploy: field(&fields, "auto_deploy") != "false",
                 generated,
             },

@@ -121,6 +121,8 @@ export function EcrView() {
     {
       "Effect": "Allow",
       "Action": [
+        "ecr:DescribeRepositories",
+        "ecr:DescribeImages",
         "ecr:BatchCheckLayerAvailability",
         "ecr:GetDownloadUrlForLayer",
         "ecr:BatchGetImage"
@@ -131,10 +133,11 @@ export function EcrView() {
 }`}</pre>
                 <p class="muted small">
                   <code>GetAuthorizationToken</code> es de cuenta y siempre exige <code>"*"</code>.
-                  Las tres de descarga valen para todos tus repositorios tal cual están; si algún
-                  día quieres acotarlas, cambia ese <code>"*"</code> por{' '}
+                  Las otras cinco valen para todos tus repositorios tal cual están; si algún día
+                  quieres acotarlas, cambia ese <code>"*"</code> por{' '}
                   <code>arn:aws:ecr:REGION:CUENTA:repository/TU-REPO</code> y repite la línea por
-                  cada repositorio que despliegues.
+                  cada repositorio que despliegues. Las dos <code>Describe*</code> son las que
+                  permiten elegir imagen desde una lista en vez de escribirla a mano.
                 </p>
 
                 <FormGrid>

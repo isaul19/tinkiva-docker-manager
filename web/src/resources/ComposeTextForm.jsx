@@ -5,39 +5,12 @@ import { Button } from '../ui/Primitives.jsx';
 import { Field, FormGrid, Input, TextArea } from '../ui/Form.jsx';
 import { useToast } from '../ui/Toast.jsx';
 
-/**
- * Esqueleto para desplegar una imagen ya publicada en un registro privado. Deja
- * el host puesto y la imagen vigilada apuntando a la misma etiqueta, que es lo
- * único que hace falta para que el panel redespliegue en cada push del CI.
- */
-function registryDraft(registry) {
-  const image = `${registry}/mi-imagen:latest`;
-  return {
-    watch_image: image,
-    compose: [
-      'services:',
-      '  app:',
-      `    image: ${image}`,
-      '    restart: unless-stopped',
-      '    ports:',
-      '      - "127.0.0.1:8080:8080"',
-      '',
-    ].join('\n'),
-  };
-}
-
 /** Crea un recurso gestionado a partir de un docker-compose pegado como YAML. */
-export function ComposeTextForm({ onCreated, registry }) {
+export function ComposeTextForm({ onCreated }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [slugTouched, setSlugTouched] = useState(false);
-  const [form, setForm] = useState({
-    name: '',
-    slug: '',
-    compose: '',
-    watch_image: '',
-    ...(registry ? registryDraft(registry) : {}),
-  });
+  const [form, setForm] = useState({ name: '', slug: '', compose: '', watch_image: '' });
 
   const update = (key) => (event) =>
     setForm((current) => ({ ...current, [key]: event.currentTarget.value }));
@@ -69,9 +42,7 @@ export function ComposeTextForm({ onCreated, registry }) {
   };
 
   return <form onSubmit={submit} autocomplete="off">
-    <p class="muted small">{registry
-      ? <>Sustituye <code>mi-imagen:latest</code> por tu repositorio en <code>{registry}</code> y ajusta los puertos. El panel hará <code>docker login</code> solo antes de cada descarga.</>
-      : <>Pega el contenido de tu <code>docker-compose.yml</code>. Se guardará en un recurso propio y podrás editarlo como texto después.</>}</p>
+    <p class="muted small">Pega el contenido de tu <code>docker-compose.yml</code>. Se guardará en un recurso propio y podrás editarlo como texto después.</p>
     <FormGrid>
       <Field label="Nombre" hint="Nombre visible del recurso en el panel.">
         <Input value={form.name} onInput={updateName} required maxLength={100} placeholder="Mi aplicación" />
@@ -80,14 +51,14 @@ export function ComposeTextForm({ onCreated, registry }) {
         <Input value={form.slug} onInput={(event) => { setSlugTouched(true); update('slug')(event); }} required pattern="[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?" placeholder="mi-aplicacion" />
       </Field>
       <Field
-        label="Imagen a vigilar (opcional)"
-        hint="Si la indicas, el panel comprueba su digest cada pocos minutos y redespliega cuando cambie. Útil con ECR o GHCR."
+        label="Redesplegar cuando cambie una imagen (opcional)"
+        hint="El panel compara su digest cada pocos minutos. Funciona con imágenes públicas sin más; si es de un registro privado que no sea el ECR conectado, el servidor necesita un docker login hecho a mano."
         wide
       >
         <Input
           value={form.watch_image}
           onInput={update('watch_image')}
-          placeholder="123456789012.dkr.ecr.us-east-1.amazonaws.com/api:latest"
+          placeholder="ghcr.io/usuario/api:latest"
         />
       </Field>
       <Field label="docker-compose.yml" hint="YAML válido para Docker Compose; máximo 128 KiB." wide>

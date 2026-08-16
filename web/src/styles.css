@@ -1071,6 +1071,16 @@ code {
   color: var(--faint);
 }
 
+/* Un campo deshabilitado tiene que notarse: sin esto, «Sin límite de RAM»
+   apagaba el input de MB y seguía pareciendo editable. */
+.input:disabled {
+  border-style: dashed;
+  border-color: var(--line-soft);
+  background: var(--surface);
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
 .select-control {
   position: relative;
   display: block;
