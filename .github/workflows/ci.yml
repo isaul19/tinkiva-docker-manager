@@ -43,4 +43,4 @@ jobs:
       - run: cargo test
       - run: cargo build --release
       - name: Smoke test API and deployment lifecycle
-        run: ./scripts/smoke-test.sh target/release/tinkivadm
+        run: ./scripts/smoke-test.sh target/release/tmanager

@@ -2,6 +2,10 @@
 set -euo pipefail
 BINARY=${1:-target/release/tmanager}
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+if [[ ! -x "$BINARY" ]]; then
+  echo "No existe el binario ejecutable '$BINARY'. Compila con 'cargo build --release' o pasa la ruta correcta." >&2
+  exit 1
+fi
 BINARY=$(realpath "$BINARY")
 TMP=$(mktemp -d)
 TOKEN='0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
@@ -36,7 +40,12 @@ TDM_WORKERS=2 \
 PID=$!
 
 for _ in $(seq 1 80); do
-  if curl -fsS "$BASE/healthz" >/dev/null; then break; fi
+  if curl -fsS "$BASE/healthz" 2>/dev/null >/dev/null; then break; fi
+  if ! kill -0 "$PID" 2>/dev/null; then
+    echo "El servidor terminó antes de responder a /healthz:" >&2
+    cat "$TMP/server.log" >&2
+    exit 1
+  fi
   sleep .1
 done
 curl -fsS "$BASE/healthz" | jq -e '.ok == true' >/dev/null
