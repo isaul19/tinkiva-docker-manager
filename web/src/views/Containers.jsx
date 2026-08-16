@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { Container, FileTerminal, FileText, MoreHorizontal, Play, RotateCw, Square } from 'lucide-preact';
+import { Container, Download, FileTerminal, FileText, MoreHorizontal, Play, RotateCw, Square } from 'lucide-preact';
 import { api } from '../lib/api.js';
 import { useApp } from '../lib/context.js';
 import { useAsync, usePolling } from '../lib/hooks.js';
@@ -17,10 +17,20 @@ import {
 } from '../ui/Primitives.jsx';
 import { useToast } from '../ui/Toast.jsx';
 import { LogsDialog } from './LogsDialog.jsx';
+import { DatabaseExportDialog } from './DatabaseExportDialog.jsx';
 import { Field, Input, TextArea } from '../ui/Form.jsx';
 import { Modal } from '../ui/Modal.jsx';
 
 const PAGE_SIZE = 10;
+
+/**
+ * Pista barata para decidir si ofrecer «Exportar SQL» en el menú. El servidor
+ * vuelve a comprobarlo de verdad al abrir el diálogo: aquí solo se evita
+ * sondear cada contenedor del listado en cada refresco.
+ */
+function looksLikeSqlDatabase(image) {
+  return /postgres|postgis|pgvector|timescale|mysql|mariadb|percona/i.test(String(image || ''));
+}
 
 function containerStatusLabel(status) {
   let value = String(status || '');
@@ -45,6 +55,7 @@ export function Containers() {
   const [busy, setBusy] = useState(null);
   const [logsFor, setLogsFor] = useState(null);
   const [consoleFor, setConsoleFor] = useState(null);
+  const [exportFor, setExportFor] = useState(null);
   const [actionMenu, setActionMenu] = useState(null);
   const [page, setPage] = useState(0);
 
@@ -83,11 +94,13 @@ export function Containers() {
       return;
     }
     const rect = button.getBoundingClientRect();
-    const menuHeight = running ? 172 : 48;
+    const exportable = running && looksLikeSqlDatabase(container.image);
+    const menuHeight = (running ? 172 : 48) + (exportable ? 42 : 0);
     const openUpward = rect.bottom + menuHeight > window.innerHeight - 12;
     setActionMenu({
       container,
       running,
+      exportable,
       left: Math.max(12, rect.right - 160),
       top: openUpward ? Math.max(12, rect.top - menuHeight - 6) : rect.bottom + 6,
     });
@@ -190,6 +203,9 @@ export function Containers() {
         title={logsFor}
       />
       <ConsoleDialog key={consoleFor?.container.id || 'closed'} state={consoleFor} onClose={() => setConsoleFor(null)} />
+      {exportFor ? (
+        <DatabaseExportDialog container={exportFor} onClose={() => setExportFor(null)} />
+      ) : null}
       {actionMenu ? (
         <div class="action-menu-items action-menu-popover" role="menu" style={`left:${actionMenu.left}px; top:${actionMenu.top}px`}>
           <button type="button" role="menuitem" onClick={() => { setActionMenu(null); setLogsFor(actionMenu.container.name); }}>
@@ -202,6 +218,12 @@ export function Containers() {
                 <FileTerminal size={15} />
                 Abrir consola
               </button>
+              {actionMenu.exportable ? (
+                <button type="button" role="menuitem" onClick={() => { setActionMenu(null); setExportFor(actionMenu.container.name); }}>
+                  <Download size={15} />
+                  Exportar SQL
+                </button>
+              ) : null}
               <button type="button" role="menuitem" disabled={busy === `${actionMenu.container.name}:restart`} onClick={() => { setActionMenu(null); act(actionMenu.container.name, 'restart'); }}>
                 <RotateCw size={15} />
                 Reiniciar

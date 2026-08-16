@@ -1,4 +1,4 @@
-use crate::docker::DockerClient;
+use crate::docker::{self, DockerClient};
 use crate::git::GitClient;
 use crate::github::GitHub;
 use crate::http::{Request, Response};
@@ -10,8 +10,9 @@ use crate::store::Store;
 use crate::templates::{self, GeneratedResource};
 use crate::util::{
     atomic_write, canonical_existing_within, constant_time_eq, json_string, now_unix, random_hex,
-    read_env_value, remove_env_key, set_env_value, valid_container_ref, valid_db_identifier,
-    valid_display_name, valid_env_key, valid_image_ref, valid_slug,
+    read_env_value, remove_env_key, set_env_value, unique_suffix, valid_container_ref,
+    valid_db_identifier, valid_display_name, valid_env_key, valid_image_ref, valid_schema_name,
+    valid_slug,
 };
 use crate::{buildpack, net, registry};
 use std::collections::HashMap;
@@ -305,6 +306,12 @@ impl App {
             }
             ("POST", ["api", "containers", container, "console"]) => {
                 self.container_console(container, request)
+            }
+            ("GET", ["api", "containers", container, "export"]) => {
+                self.container_export_info(container)
+            }
+            ("POST", ["api", "containers", container, "export"]) => {
+                self.container_export(container, request)
             }
             ("POST", ["api", "containers", container, action]) => {
                 self.container_action(container, action)
@@ -769,6 +776,112 @@ impl App {
                 )
             }
             Err(error) => json_error(400, &error),
+        }
+    }
+
+    /// Motor detectado y bases de datos disponibles para exportar. Se consulta
+    /// al abrir el diálogo, no en el listado: cada llamada ejecuta comandos
+    /// dentro del contenedor.
+    fn container_export_info(&self, container: &str) -> Response {
+        let engine = match self.exportable_database(container) {
+            Ok(engine) => engine,
+            Err(response) => return response,
+        };
+        let schemas = match self.docker.database_schemas(container, engine) {
+            Ok(schemas) => schemas,
+            Err(error) => return json_error(502, &error),
+        };
+        let list = schemas
+            .iter()
+            .map(|schema| json_string(schema))
+            .collect::<Vec<_>>()
+            .join(",");
+        Response::json(
+            200,
+            format!(
+                "{{\"database\":{},\"database_label\":{},\"schemas\":[{list}]}}",
+                json_string(engine),
+                json_string(database_label(engine)),
+            ),
+        )
+    }
+
+    /// Genera el volcado y lo entrega como descarga. El `.sql` se escribe en un
+    /// archivo temporal y se transmite por trozos: el panel no guarda el
+    /// volcado en memoria ni deja rastro en disco después de enviarlo.
+    fn container_export(&self, container: &str, request: &Request) -> Response {
+        let fields = match request.form() {
+            Ok(fields) => fields,
+            Err(error) => return json_error(400, &error),
+        };
+        let mode = fields.get("mode").map_or("all", String::as_str);
+        if !matches!(mode, "all" | "structure" | "data") {
+            return json_error(400, "modo de exportación no válido");
+        }
+        let schemas: Vec<String> = fields
+            .get("schemas")
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|schema| !schema.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if schemas.is_empty() {
+            return json_error(400, "selecciona al menos una base de datos");
+        }
+        if !schemas.iter().all(|schema| valid_schema_name(schema)) {
+            return json_error(400, "nombre de base de datos inválido");
+        }
+
+        let engine = match self.exportable_database(container) {
+            Ok(engine) => engine,
+            Err(response) => return response,
+        };
+
+        let destination = env::temp_dir().join(format!("tdm-dump-{}.sql", unique_suffix()));
+        let result = self
+            .docker
+            .database_dump(container, engine, mode, &schemas, &destination);
+        match result {
+            Ok(dump) if dump.success => Response::temporary_file_download(
+                destination,
+                dump.bytes,
+                "application/sql; charset=utf-8",
+                &format!("{container}.sql"),
+            ),
+            Ok(dump) => {
+                let _ = fs::remove_file(&destination);
+                json_error(502, &format!("la exportación falló: {}", dump.summary()))
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&destination);
+                json_error(502, &error)
+            }
+        }
+    }
+
+    /// Comprueba que el contenedor sea una base de datos con volcado SQL.
+    fn exportable_database(&self, container: &str) -> Result<&'static str, Response> {
+        let info = match self.docker.container_console_info(container) {
+            Ok(info) => info,
+            Err(error) => return Err(json_error(400, &error)),
+        };
+        match info.database {
+            Some(engine) if docker::exportable_engine(engine) => Ok(engine),
+            Some(engine) => Err(json_error(
+                422,
+                &format!(
+                    "{} no genera volcados SQL; solo PostgreSQL, MySQL y MariaDB.",
+                    database_label(engine)
+                ),
+            )),
+            None => Err(json_error(
+                422,
+                "el contenedor no parece una base de datos SQL",
+            )),
         }
     }
 

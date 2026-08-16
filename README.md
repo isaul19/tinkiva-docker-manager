@@ -11,6 +11,11 @@ Panel de despliegue Docker de un solo nodo, escrito en Rust y diseñado para ser
 - Lista y métricas de contenedores mediante Docker CLI.
 - Logs de contenedores y proyectos Compose.
 - Start, stop y restart de contenedores.
+- Exportación a `.sql` de contenedores PostgreSQL, MySQL y MariaDB: se eligen las
+  bases y si el volcado lleva datos y estructura, solo estructura (con
+  procedimientos, funciones y triggers) o solo datos. El archivo se descarga como
+  `contenedor_AAAAMMDDHHMMSS.sql` y se transmite por trozos, sin pasar por la
+  memoria del panel.
 - Alta de recursos en un diálogo guiado, con cuatro orígenes:
   - **Bases de datos**: PostgreSQL, MySQL, MariaDB, MongoDB y Redis, con volumen,
     healthcheck, límite de RAM y red privada.
@@ -466,6 +471,8 @@ Authorization: Bearer <TDM_ADMIN_TOKEN>
 | `POST` | `/api/containers/:id/start` | Iniciar. |
 | `POST` | `/api/containers/:id/stop` | Detener. |
 | `POST` | `/api/containers/:id/restart` | Reiniciar. |
+| `GET` | `/api/containers/:id/export` | Motor SQL detectado y bases de datos exportables. |
+| `POST` | `/api/containers/:id/export` | Descarga el volcado `.sql` (`mode=all\|structure\|data`, `schemas=a,b`). |
 | `GET` | `/api/projects` | Proyectos. |
 | `POST` | `/api/projects` | Registrar proyecto. |
 | `DELETE` | `/api/projects/:slug` | Desregistrar. `?remove=stack` detiene contenedores; `?remove=all` borra además volúmenes y archivos. |

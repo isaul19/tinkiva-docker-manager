@@ -96,6 +96,20 @@ pub fn valid_db_identifier(value: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+/// Nombre de base de datos tal y como lo devuelve el motor. Es más permisivo
+/// que [`valid_db_identifier`] (hay bases llamadas `mi-app` o `app.v2`) pero
+/// sigue descartando espacios, comillas y cualquier cosa que un cliente de
+/// línea de comandos pudiera confundir con una opción.
+pub fn valid_schema_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first.is_ascii_alphanumeric() || first == b'_')
+        && value.len() <= 64
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'$'))
+}
+
 pub fn valid_display_name(value: &str) -> bool {
     let trimmed = value.trim();
     !trimmed.is_empty()
@@ -395,6 +409,18 @@ mod tests {
     fn field_encoding_round_trips() {
         let original = "ruta con espacios/áé\nfin";
         assert_eq!(decode_field(&encode_field(original)).unwrap(), original);
+    }
+
+    #[test]
+    fn schema_names_allow_real_database_names_only() {
+        assert!(valid_schema_name("postgres"));
+        assert!(valid_schema_name("mi-app"));
+        assert!(valid_schema_name("app.v2"));
+        assert!(!valid_schema_name(""));
+        assert!(!valid_schema_name("-flag"));
+        assert!(!valid_schema_name("con espacio"));
+        assert!(!valid_schema_name("comi\"lla"));
+        assert!(!valid_schema_name(&"a".repeat(65)));
     }
 
     #[test]

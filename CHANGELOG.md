@@ -4,6 +4,17 @@
 
 ### Nuevas funcionalidades
 
+- **Exportar bases de datos desde el panel**: los contenedores PostgreSQL, MySQL y
+  MariaDB muestran «Exportar SQL» en su menú de acciones. El diálogo lista las bases
+  del motor y permite elegir entre datos y estructura, solo estructura (incluye
+  `CREATE`, procedimientos, funciones y triggers) o solo datos. El volcado lo genera
+  `pg_dump` o `mysqldump` dentro del propio contenedor y se descarga como
+  `contenedor_AAAAMMDDHHMMSS.sql`. Las filas salen siempre como `INSERT` con las
+  columnas nombradas (`--column-inserts` y `--complete-insert`), no como `COPY` ni
+  como `INSERT` posicional.
+  Nuevas rutas `GET` y `POST /api/containers/:id/export`. Para no romper la premisa
+  de RAM constante, el volcado se escribe en un temporal con permisos 0600 y se
+  transmite en trozos de 64 KiB, borrándose siempre al terminar la descarga.
 - **`tmanager token`**: imprime el token administrador leído de `TDM_ADMIN_TOKEN` o
   del archivo de configuración. Solo el token, sin adornos, para usarlo directamente
   en `curl -H "Authorization: Bearer $(tmanager token)"`.

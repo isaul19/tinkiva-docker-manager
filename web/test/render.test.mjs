@@ -105,6 +105,21 @@ const API = {
       block_io: '0B / 0B',
       pids: '12',
     },
+    {
+      id: 'def',
+      name: 'storagia-api',
+      image: 'ghcr.io/example/app:one',
+      status: 'Up 10 minutes',
+      state: 'running',
+      ports: '127.0.0.1:3000->3000/tcp',
+      created_at: '2026-08-14 10:00:00',
+      cpu: '1.20%',
+      memory: '48MiB / 384MiB',
+      memory_percent: '12.50%',
+      network_io: '1kB / 2kB',
+      block_io: '0B / 0B',
+      pids: '8',
+    },
   ],
   '/api/projects': [
     {
@@ -184,6 +199,11 @@ const API = {
     webhook_url: null,
   },
   '/api/github/installations': [],
+  '/api/containers/storagia-postgres/export': {
+    database: 'postgres',
+    database_label: 'PostgreSQL',
+    schemas: ['storagia', 'postgres'],
+  },
 };
 
 /** Monta el bundle en un DOM limpio y devuelve utilidades de inspección. */
@@ -270,10 +290,12 @@ async function mount({ token = null, hash = '#/dashboard' } = {}) {
   const root = () => document.getElementById('root');
   const text = () => root().textContent;
 
-  /** Busca un elemento por su texto visible. */
+  /** Busca un elemento por su texto visible o, si no lo tiene, por aria-label. */
   const find = (selector, needle) =>
-    [...document.querySelectorAll(selector)].find((node) =>
-      node.textContent.includes(needle),
+    [...document.querySelectorAll(selector)].find(
+      (node) =>
+        node.textContent.includes(needle) ||
+        (node.getAttribute('aria-label') || '').includes(needle),
     );
 
   /** Dispara un click con los globals instalados y espera al rerender. */
@@ -432,6 +454,36 @@ test('el origen de repositorio se bloquea si GitHub no está conectado', async (
   assert.ok(card, 'debe existir la tarjeta de repositorio');
   assert.ok(card.disabled, 'debe estar deshabilitada sin GitHub conectado');
   assert.match(card.textContent, /Conecta GitHub primero/);
+});
+
+test('el menú de un contenedor de base de datos abre el diálogo de exportación', async () => {
+  const app = await mount({ token: 'x'.repeat(40), hash: '#/containers' });
+  assert.match(app.currentText(), /storagia-postgres/);
+
+  await app.click('button', 'Acciones para storagia-postgres');
+  assert.match(app.currentText(), /Exportar SQL/, 'el menú debe ofrecer la exportación');
+
+  await app.click('button', 'Exportar SQL');
+  assert.ok(
+    app.calls.includes('/api/containers/storagia-postgres/export'),
+    'debe consultar el motor y los esquemas',
+  );
+
+  const text = app.currentText();
+  assert.match(text, /PostgreSQL detectado/);
+  assert.match(text, /storagia/, 'debe listar los esquemas');
+  assert.match(text, /Datos y estructura/);
+  assert.match(text, /Solo estructura/);
+  assert.match(text, /Solo datos/);
+});
+
+test('un contenedor que no es base de datos no ofrece exportar', async () => {
+  const app = await mount({ token: 'x'.repeat(40), hash: '#/containers' });
+  await app.click('button', 'Acciones para storagia-api');
+
+  const menu = app.find('.action-menu-popover', 'Ver logs');
+  assert.ok(menu, 'el menú debe estar abierto');
+  assert.ok(!menu.textContent.includes('Exportar SQL'));
 });
 
 let failures = 0;

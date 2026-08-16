@@ -1,8 +1,10 @@
 use crate::util::parse_urlencoded;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::path::PathBuf;
 use std::time::Duration;
 
 const MAX_HEADER_BYTES: usize = 32 * 1024;
@@ -41,14 +43,34 @@ impl Request {
     }
 }
 
+const STREAM_CHUNK_BYTES: usize = 64 * 1024;
+
+#[derive(Debug)]
+enum Body {
+    /// Los archivos estáticos se sirven prestados desde `.rodata`: sin esta
+    /// distinción cada petición de `/app.js` copiaría el bundle entero a un
+    /// `Vec` nuevo, multiplicando el consumo del panel por número de workers.
+    Bytes(Cow<'static, [u8]>),
+    /// Cuerpo que vive en disco y se envía por trozos. Un volcado SQL puede
+    /// pesar gigabytes: cargarlo en un `Vec` tiraría el panel. El archivo se
+    /// borra siempre al terminar, aunque el cliente corte la descarga.
+    TemporaryFile { path: PathBuf, length: u64 },
+}
+
+impl Body {
+    fn length(&self) -> u64 {
+        match self {
+            Self::Bytes(bytes) => bytes.len() as u64,
+            Self::TemporaryFile { length, .. } => *length,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Response {
     status: u16,
     content_type: &'static str,
-    /// Los archivos estáticos se sirven prestados desde `.rodata`: sin esta
-    /// distinción cada petición de `/app.js` copiaría el bundle entero a un
-    /// `Vec` nuevo, multiplicando el consumo del panel por número de workers.
-    body: Cow<'static, [u8]>,
+    body: Body,
     headers: Vec<(String, String)>,
 }
 
@@ -57,7 +79,7 @@ impl Response {
         Self {
             status,
             content_type,
-            body: Cow::Owned(body),
+            body: Body::Bytes(Cow::Owned(body)),
             headers: Vec::new(),
         }
     }
@@ -66,9 +88,27 @@ impl Response {
         Self {
             status: 200,
             content_type,
-            body: Cow::Borrowed(body.as_bytes()),
+            body: Body::Bytes(Cow::Borrowed(body.as_bytes())),
             headers: Vec::new(),
         }
+    }
+
+    /// Descarga servida desde un archivo temporal que se borra al terminar.
+    /// `filename` se sanea aquí: solo llega al navegador como ASCII seguro.
+    pub fn temporary_file_download(
+        path: PathBuf,
+        length: u64,
+        content_type: &'static str,
+        filename: &str,
+    ) -> Self {
+        let disposition = format!("attachment; filename=\"{}\"", safe_filename(filename));
+        Self {
+            status: 200,
+            content_type,
+            body: Body::TemporaryFile { path, length },
+            headers: Vec::new(),
+        }
+        .with_header("Content-Disposition", disposition)
     }
 
     pub fn json(status: u16, body: String) -> Self {
@@ -117,7 +157,7 @@ impl Response {
             self.status,
             reason,
             self.content_type,
-            self.body.len()
+            self.body.length()
         );
 
         head.push_str("X-Content-Type-Options: nosniff\r\n");
@@ -148,10 +188,58 @@ impl Response {
         head.push_str("\r\n");
 
         stream.write_all(head.as_bytes())?;
-        if !head_only {
-            stream.write_all(&self.body)?;
+        match self.body {
+            Body::Bytes(bytes) => {
+                if !head_only {
+                    stream.write_all(&bytes)?;
+                }
+            }
+            Body::TemporaryFile { path, .. } => {
+                let result = if head_only {
+                    Ok(())
+                } else {
+                    write_file_body(stream, &path)
+                };
+                // El volcado es de un solo uso: se borra tanto si la descarga
+                // terminó como si el navegador cortó a mitad.
+                let _ = fs::remove_file(&path);
+                result?;
+            }
         }
         stream.flush()
+    }
+}
+
+fn write_file_body(stream: &mut TcpStream, path: &PathBuf) -> io::Result<()> {
+    let mut file = File::open(path)?;
+    let mut chunk = vec![0_u8; STREAM_CHUNK_BYTES];
+    loop {
+        let read = file.read(&mut chunk)?;
+        if read == 0 {
+            return Ok(());
+        }
+        stream.write_all(&chunk[..read])?;
+    }
+}
+
+/// Deja el nombre en ASCII imprimible sin comillas ni separadores de ruta, para
+/// que no pueda romper la cabecera `Content-Disposition`.
+fn safe_filename(value: &str) -> String {
+    let cleaned: String = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(120)
+        .collect();
+    if cleaned.is_empty() {
+        "descarga".to_owned()
+    } else {
+        cleaned
     }
 }
 
@@ -335,5 +423,13 @@ mod tests {
     #[test]
     fn finds_header_terminator() {
         assert_eq!(find_subslice(b"a\r\n\r\nb", b"\r\n\r\n"), Some(1));
+    }
+
+    #[test]
+    fn sanitizes_download_filenames() {
+        assert_eq!(safe_filename("app_20260815143052.sql"), "app_20260815143052.sql");
+        assert_eq!(safe_filename("../etc/passwd"), ".._etc_passwd");
+        assert_eq!(safe_filename("a\"\r\nb"), "a___b");
+        assert_eq!(safe_filename(""), "descarga");
     }
 }

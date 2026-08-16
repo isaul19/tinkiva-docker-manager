@@ -95,6 +95,28 @@ grep -qx 'APP_IMAGE=ghcr.io/example/app:one' "$TMP/apps/demo/.env"
 curl -fsS "${AUTH[@]}" "$BASE/api/history?project=demo&limit=10" | jq -e 'length == 4' >/dev/null
 curl -fsS "${AUTH[@]}" "$BASE/api/projects/demo/logs?tail=50" | grep -q 'servicio iniciado'
 
+# Exportación SQL: el panel detecta el motor, lista las bases y entrega el
+# volcado como descarga con nombre de archivo propio.
+curl -fsS "${AUTH[@]}" "$BASE/api/containers/postgres/export" \
+  | jq -e '.database == "postgres" and .database_label == "PostgreSQL" and (.schemas | index("storagia")) != null' >/dev/null
+curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/containers/postgres/export" \
+  --data-urlencode 'mode=structure' \
+  --data-urlencode 'schemas=storagia,postgres' \
+  -D "$TMP/export.headers" -o "$TMP/export.sql"
+grep -qi 'content-disposition: attachment; filename="postgres.sql"' "$TMP/export.headers"
+grep -q 'CREATE TABLE demo' "$TMP/export.sql"
+grep -q -- '-- tinkiva: storagia' "$TMP/export.sql"
+
+# Un contenedor que no es base de datos, un modo desconocido y una selección
+# vacía deben rechazarse antes de tocar Docker.
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$BASE/api/containers/app/export")" == '422' ]]
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST \
+  "$BASE/api/containers/postgres/export" -d 'mode=todo&schemas=storagia')" == '400' ]]
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST \
+  "$BASE/api/containers/postgres/export" -d 'mode=all&schemas=')" == '400' ]]
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST \
+  "$BASE/api/containers/postgres/export" -d 'mode=all&schemas=--host%3Devil')" == '400' ]]
+
 # La ruta histórica de PostgreSQL debe seguir funcionando igual que antes.
 curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/templates/postgres" \
   --data-urlencode 'slug=demo-db' \

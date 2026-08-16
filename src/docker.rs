@@ -1,6 +1,6 @@
 use crate::model::{Project, KIND_REPOSITORY};
-use crate::proc::{self, CommandResult};
-use crate::util::{ json_string, truncate_text, valid_container_ref };
+use crate::proc::{self, CommandResult, FileCommandResult};
+use crate::util::{ json_string, truncate_text, valid_container_ref, valid_schema_name };
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::{ Path, PathBuf };
@@ -380,6 +380,84 @@ impl DockerClient {
         )
     }
 
+    /// Lista las bases de datos exportables del contenedor. En MySQL y MariaDB
+    /// «esquema» y «base de datos» son lo mismo; en PostgreSQL se listan las
+    /// bases conectables para que el volcado sea uno por base.
+    pub fn database_schemas(&self, container: &str, engine: &str) -> Result<Vec<String>, String> {
+        if !valid_container_ref(container) {
+            return Err("identificador de contenedor inválido".to_owned());
+        }
+        let script = match engine {
+            "postgres" => "export PGPASSWORD=\"${POSTGRES_PASSWORD:-}\"; psql -Atq -U \"${POSTGRES_USER:-postgres}\" -d \"${POSTGRES_DB:-postgres}\" -c \"SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY 1\"",
+            "mysql" | "mariadb" => "client=$(command -v mariadb || command -v mysql) || exit 127; password=\"${MYSQL_PASSWORD:-${MARIADB_PASSWORD:-${MYSQL_ROOT_PASSWORD:-${MARIADB_ROOT_PASSWORD:-}}}}\"; [ -z \"$password\" ] || export MYSQL_PWD=\"$password\"; \"$client\" -u \"${MYSQL_USER:-${MARIADB_USER:-root}}\" -N -B -e \"SHOW DATABASES\"",
+            _ => return Err("el motor no admite exportación SQL".to_owned()),
+        };
+
+        let result = self.run(
+            ["exec", container, "sh", "-lc", script],
+            None,
+            Duration::from_secs(30),
+        )?;
+        if !result.success {
+            return Err(result.summary());
+        }
+
+        let schemas: Vec<String> = result
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|name| !name.is_empty() && !is_system_schema(engine, name))
+            .filter(|name| valid_schema_name(name))
+            .map(str::to_owned)
+            .collect();
+        if schemas.is_empty() {
+            return Err("no se encontraron bases de datos exportables".to_owned());
+        }
+        Ok(schemas)
+    }
+
+    /// Vuelca las bases indicadas a `destination` usando el cliente de volcado
+    /// del propio contenedor. La salida nunca pasa por la memoria del panel: el
+    /// subproceso escribe directamente en el archivo.
+    pub fn database_dump(
+        &self,
+        container: &str,
+        engine: &str,
+        mode: &str,
+        schemas: &[String],
+        destination: &Path,
+    ) -> Result<FileCommandResult, String> {
+        if !valid_container_ref(container) {
+            return Err("identificador de contenedor inválido".to_owned());
+        }
+        if schemas.is_empty() {
+            return Err("selecciona al menos una base de datos".to_owned());
+        }
+        if schemas.len() > 64 {
+            return Err("demasiadas bases seleccionadas".to_owned());
+        }
+        if !schemas.iter().all(|schema| valid_schema_name(schema)) {
+            return Err("nombre de base de datos inválido".to_owned());
+        }
+        let script = dump_script(engine, mode).ok_or_else(|| {
+            "combinación de motor y modo de exportación no soportada".to_owned()
+        })?;
+
+        // Los nombres viajan como argumentos posicionales (`$@`): el script no
+        // los interpola, así que no hay forma de inyectar shell desde el panel.
+        let mut arguments: Vec<&str> =
+            vec!["exec", container, "sh", "-lc", script.as_str(), "tdm-dump"];
+        arguments.extend(schemas.iter().map(String::as_str));
+
+        proc::run_to_file(
+            &self.binary,
+            arguments,
+            destination,
+            &[("DOCKER_CLI_HINTS", "false")],
+            Duration::from_secs(1800),
+        )
+    }
+
     pub fn compose_logs(&self, project: &Project, tail: usize) -> Result<String, String> {
         let tail = tail.clamp(10, 2000).to_string();
         let compose = project.compose_file.to_string_lossy().into_owned();
@@ -636,6 +714,60 @@ fn summarize_project_status(output: &str) -> &'static str {
     }
 }
 
+/// Motores cuyo volcado es un `.sql` restaurable. MongoDB y Redis se detectan
+/// para la consola, pero sus copias son binarias y no encajan en este flujo.
+pub fn exportable_engine(engine: &str) -> bool {
+    matches!(engine, "postgres" | "mysql" | "mariadb")
+}
+
+fn is_system_schema(engine: &str, name: &str) -> bool {
+    match engine {
+        "mysql" | "mariadb" => matches!(
+            name.to_ascii_lowercase().as_str(),
+            "information_schema" | "performance_schema" | "mysql" | "sys"
+        ),
+        _ => false,
+    }
+}
+
+/// Script de volcado por motor y modo. Solo cambian las banderas, que salen de
+/// esta tabla cerrada: nada de lo que llega en la petición se interpola aquí.
+/// Los nombres de las bases viajan aparte, como `$@`.
+///
+/// Los modos con datos usan siempre `INSERT` con las columnas nombradas
+/// (`--column-inserts` en PostgreSQL, `--complete-insert` en MySQL y MariaDB).
+/// Es más lento de restaurar y ocupa más que el `COPY` o el `INSERT` posicional
+/// por omisión, pero el volcado sobrevive a que las columnas cambien de orden.
+fn dump_script(engine: &str, mode: &str) -> Option<String> {
+    const PG_PREFIX: &str = "export PGPASSWORD=\"${POSTGRES_PASSWORD:-}\"; user=\"${POSTGRES_USER:-postgres}\"; for db in \"$@\"; do printf -- '--\\n-- tinkiva: %s\\n--\\n' \"$db\"; pg_dump -U \"$user\"";
+    const PG_SUFFIX: &str = " -d \"$db\" || exit 1; done";
+    const MY_PREFIX: &str = "client=$(command -v mysqldump || command -v mariadb-dump) || exit 127; password=\"${MYSQL_PASSWORD:-${MARIADB_PASSWORD:-${MYSQL_ROOT_PASSWORD:-${MARIADB_ROOT_PASSWORD:-}}}}\"; [ -z \"$password\" ] || export MYSQL_PWD=\"$password\"; \"$client\" -u \"${MYSQL_USER:-${MARIADB_USER:-root}}\"";
+    const MY_SUFFIX: &str = " --databases \"$@\"";
+
+    let (prefix, flags, suffix) = match (engine, mode) {
+        ("postgres", "all") => (PG_PREFIX, " --column-inserts", PG_SUFFIX),
+        ("postgres", "structure") => (PG_PREFIX, " --schema-only", PG_SUFFIX),
+        ("postgres", "data") => (PG_PREFIX, " --data-only --column-inserts", PG_SUFFIX),
+        ("mysql" | "mariadb", "all") => (
+            MY_PREFIX,
+            " --routines --triggers --events --single-transaction --complete-insert",
+            MY_SUFFIX,
+        ),
+        ("mysql" | "mariadb", "structure") => (
+            MY_PREFIX,
+            " --no-data --routines --triggers --events",
+            MY_SUFFIX,
+        ),
+        ("mysql" | "mariadb", "data") => (
+            MY_PREFIX,
+            " --no-create-info --skip-triggers --single-transaction --complete-insert",
+            MY_SUFFIX,
+        ),
+        _ => return None,
+    };
+    Some(format!("{prefix}{flags}{suffix}"))
+}
+
 fn detect_database(
     image: &str,
     environment: &str,
@@ -707,6 +839,47 @@ mod tests {
             )),
             "error"
         );
+    }
+
+    #[test]
+    fn dump_scripts_cover_the_three_modes_of_each_sql_engine() {
+        let structure = dump_script("postgres", "structure").unwrap();
+        assert!(structure.contains("--schema-only"));
+        assert!(dump_script("postgres", "data").unwrap().contains("--data-only"));
+        let full = dump_script("postgres", "all").unwrap();
+        assert!(!full.contains("--schema-only") && !full.contains("--data-only"));
+
+        // Los datos siempre salen como INSERT con las columnas nombradas.
+        for mode in ["all", "data"] {
+            assert!(dump_script("postgres", mode).unwrap().contains("--column-inserts"));
+            assert!(dump_script("mysql", mode).unwrap().contains("--complete-insert"));
+            assert!(dump_script("mariadb", mode).unwrap().contains("--complete-insert"));
+        }
+        // Sin datos no hay INSERT que nombrar.
+        assert!(!dump_script("postgres", "structure").unwrap().contains("--column-inserts"));
+        assert!(!dump_script("mysql", "structure").unwrap().contains("--complete-insert"));
+
+        // Procedimientos, funciones y triggers solo entran con --routines.
+        assert!(dump_script("mariadb", "structure").unwrap().contains("--routines --triggers"));
+        assert!(dump_script("mysql", "data").unwrap().contains("--no-create-info"));
+
+        // Todos los scripts reciben las bases como argumentos posicionales.
+        for engine in ["postgres", "mysql", "mariadb"] {
+            for mode in ["all", "structure", "data"] {
+                assert!(dump_script(engine, mode).unwrap().contains("\"$@\""));
+            }
+        }
+
+        assert!(dump_script("mongodb", "all").is_none());
+        assert!(dump_script("postgres", "todo").is_none());
+    }
+
+    #[test]
+    fn system_schemas_are_hidden_only_for_mysql_family() {
+        assert!(is_system_schema("mysql", "information_schema"));
+        assert!(is_system_schema("mariadb", "SYS"));
+        assert!(!is_system_schema("mysql", "app"));
+        assert!(!is_system_schema("postgres", "postgres"));
     }
 
     #[test]

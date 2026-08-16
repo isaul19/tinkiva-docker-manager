@@ -72,6 +72,20 @@ async function request(method, path, options = {}) {
     throw new ApiError('La sesión ya no es válida', 401);
   }
 
+  // Las descargas pueden pesar cientos de MB: se devuelven como Blob para no
+  // materializarlas también como string.
+  if (options.asBlob) {
+    if (response.ok) return response.blob();
+    const detail = await response.text();
+    let payload = null;
+    try {
+      payload = JSON.parse(detail);
+    } catch {
+      payload = null;
+    }
+    throw new ApiError((payload && payload.error) || detail || `Error ${response.status}`, response.status, payload);
+  }
+
   const text = await response.text();
   if (options.asText) {
     if (!response.ok) throw new ApiError(text || `Error ${response.status}`, response.status);
@@ -101,6 +115,9 @@ export const api = {
   text: (path, query) => request('GET', `${path}${buildQuery(query)}`, { asText: true }),
   post: (path, form) => request('POST', path, { form: form || {} }),
   del: (path, query) => request('DELETE', `${path}${buildQuery(query)}`),
+
+  /** POST que devuelve un archivo. El nombre lo pone quien llama. */
+  download: (path, form) => request('POST', path, { form: form || {}, asBlob: true }),
 
   /** Valida un token contra /api/info antes de guardarlo. */
   async signIn(candidate) {
