@@ -28,6 +28,13 @@
 
 ### Correcciones
 
+- **`stop` no encontraba el panel** cuando la configuración estaba suelta en la raíz
+  (`./tinkiva.env`, el layout anterior a 0.9). En ese caso la raíz de estado es el propio
+  directorio de trabajo, así que el archivo pid coincidía con el «pid heredado» que la
+  migración borraba al arrancar cualquier comando: `stop` lo eliminaba y acto seguido leía
+  que no había instancia, dejando el proceso vivo y fuera de control. La limpieza ahora
+  respeta el pid en uso y nunca borra el de un proceso que sigue corriendo, así que `start`
+  también vuelve a avisar en lugar de levantar un segundo panel encima.
 - El resumen de la vista de imágenes quedaba pegado a los bordes del panel y la casilla
   «Solo sin usar» se salía por la derecha.
 

@@ -55,7 +55,10 @@ pub fn config_path() -> PathBuf {
 pub fn migrate_legacy_state() {
     let legacy_pid = PathBuf::from("tinkiva.pid");
     if legacy_pid.exists() {
-        let _ = std::fs::remove_file(&legacy_pid);
+        let running = read_pid_file(&legacy_pid).is_some_and(process_exists);
+        if disposable_pid(&legacy_pid, &crate::daemon::pid_file(), running) {
+            let _ = std::fs::remove_file(&legacy_pid);
+        }
     }
 
     let legacy_dir = PathBuf::from(LEGACY_STATE_DIR);
@@ -63,14 +66,28 @@ pub fn migrate_legacy_state() {
     if !legacy_dir.exists() || new_dir.exists() {
         return;
     }
-    if let Ok(contents) = std::fs::read_to_string(legacy_dir.join("tinkiva.pid")) {
-        if let Ok(pid) = contents.trim().parse::<u32>() {
-            if Path::new(&format!("/proc/{pid}")).exists() {
-                return;
-            }
-        }
+    if read_pid_file(&legacy_dir.join("tinkiva.pid")).is_some_and(process_exists) {
+        return;
     }
     let _ = std::fs::rename(&legacy_dir, &new_dir);
+}
+
+/// Un pid del layout antiguo solo se puede borrar si ya no es el que el panel
+/// usa ahora y su proceso murió.
+///
+/// Con la config suelta en la raíz (`./tinkiva.env`), la raíz de estado *es* el
+/// directorio actual, así que el pid «heredado» y el vigente son el mismo
+/// archivo: borrarlo dejaba el panel corriendo pero invisible para `stop`.
+fn disposable_pid(legacy: &Path, in_use: &Path, running: bool) -> bool {
+    legacy != in_use && !running
+}
+
+fn read_pid_file(path: &Path) -> Option<u32> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+fn process_exists(pid: u32) -> bool {
+    Path::new(&format!("/proc/{pid}")).exists()
 }
 
 pub fn state_root() -> PathBuf {
@@ -569,6 +586,20 @@ fn ask_port(reader: &mut io::StdinLock, default: u16) -> Result<u16, String> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn the_pid_in_use_is_never_treated_as_legacy_leftover() {
+        let legacy = Path::new("tinkiva.pid");
+
+        // Config en `tinkiva-docker-manager/`: el pid vigente vive en otro sitio.
+        let elsewhere = Path::new("tinkiva-docker-manager/tinkiva.pid");
+        assert!(disposable_pid(legacy, elsewhere, false));
+        assert!(!disposable_pid(legacy, elsewhere, true));
+
+        // Config suelta en la raíz: heredado y vigente son el mismo archivo.
+        assert!(!disposable_pid(legacy, legacy, false));
+        assert!(!disposable_pid(legacy, legacy, true));
+    }
 
     #[test]
     fn update_replacement_is_atomic_and_executable() {
