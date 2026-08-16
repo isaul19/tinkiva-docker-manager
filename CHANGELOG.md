@@ -1,6 +1,6 @@
 # Changelog
 
-## Sin publicar
+## 0.9.1 — 2026-08-15
 
 ### Nuevas funcionalidades
 
