@@ -77,6 +77,9 @@ pub struct ImageInfo {
     /// interfaz, que es donde vive el idioma del panel.
     pub created_since: String,
     pub containers: Vec<String>,
+    /// Slug del recurso que aún puede volver a esta imagen con «Rollback». Lo
+    /// rellena la capa de aplicación, que es la que conoce el historial.
+    pub protected_by: Option<String>,
 }
 
 impl ImageInfo {
@@ -98,6 +101,7 @@ impl ImageInfo {
                 "\"size_bytes\":{},",
                 "\"created_since\":{},",
                 "\"in_use\":{},",
+                "\"protected_by\":{},",
                 "\"containers\":[{}]",
                 "}}"
             ),
@@ -109,6 +113,9 @@ impl ImageInfo {
             self.size_bytes,
             json_string(&self.created_since),
             !self.containers.is_empty(),
+            self.protected_by
+                .as_deref()
+                .map_or_else(|| "null".to_owned(), json_string),
             containers
         )
     }
@@ -318,6 +325,7 @@ impl DockerClient {
                 repository,
                 tag,
                 containers,
+                protected_by: None,
             });
         }
         // Las más pesadas primero: la lista existe sobre todo para recuperar disco.
@@ -404,6 +412,60 @@ impl DockerClient {
                 .push(name.trim().trim_start_matches('/').to_owned());
         }
         Ok(users)
+    }
+
+    /// Etiquetas de un repositorio local, de la más reciente a la más antigua.
+    /// Es el orden natural de `docker images`, que es justo el que necesita la
+    /// retención de builds.
+    pub fn repository_images(&self, repository: &str) -> Result<Vec<String>, String> {
+        if !valid_container_ref(repository) {
+            return Err("repositorio inválido".to_owned());
+        }
+        let result = self.run(
+            ["images", repository, "--format", "{{.Repository}}:{{.Tag}}"],
+            None,
+            Duration::from_secs(15),
+        )?;
+        if !result.success {
+            return Err(result.summary());
+        }
+        Ok(result
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.ends_with(":<none>"))
+            .map(str::to_owned)
+            .collect())
+    }
+
+    /// Autentica Docker contra un registro. La contraseña viaja por la entrada
+    /// estándar (`--password-stdin`), nunca por `argv`: de otro modo cualquier
+    /// usuario del servidor la vería con un simple `ps`.
+    pub fn login(&self, registry: &str, username: &str, password: &str) -> Result<(), String> {
+        if !valid_container_ref(registry) || !valid_container_ref(username) {
+            return Err("registro o usuario inválidos".to_owned());
+        }
+        let result = proc::run_with_input(
+            &self.binary,
+            ["login", "--username", username, "--password-stdin", registry],
+            None,
+            &[("DOCKER_CLI_HINTS", "false")],
+            Some(password),
+            Duration::from_secs(30),
+        )?;
+        if result.success {
+            Ok(())
+        } else {
+            Err(result.summary())
+        }
+    }
+
+    pub fn logout(&self, registry: &str) -> Result<(), String> {
+        if !valid_container_ref(registry) {
+            return Err("registro inválido".to_owned());
+        }
+        self.run(["logout", registry], None, Duration::from_secs(20))
+            .map(|_| ())
     }
 
     /// Borra una imagen local. Nunca usa `--force`: si Docker considera que algo

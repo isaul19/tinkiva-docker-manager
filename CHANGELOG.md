@@ -1,6 +1,35 @@
 # Changelog
 
-## 0.10.0 — 2026-08-16
+## Sin publicar
+
+### Nuevas funcionalidades
+
+- **Integración con Amazon ECR** en «Integraciones → Amazon ECR». Guardas un access key de
+  solo lectura y el panel pide a AWS un token de doce horas y hace `docker login` solo,
+  renovándolo antes de cada descarga. La firma SigV4 se calcula en el propio binario con las
+  primitivas que ya existían en `crypto`: **no añade dependencias ni exige el CLI de `aws`**
+  en el servidor. La contraseña viaja por `--password-stdin`, nunca por `argv`, y las
+  credenciales se guardan con permisos 0600.
+- **Auto-deploy desde cualquier registro para recursos Compose**: el formulario acepta una
+  «imagen a vigilar» opcional y el watcher compara su digest cada ronda, redesplegando cuando
+  el registro publica una versión nueva. Funciona con ECR, GHCR o Docker Hub.
+- **Retención automática de builds**: cada push dejaba una imagen
+  `tinkiva/<slug>:<commit>` para siempre. Ahora, tras cada despliegue correcto de un
+  repositorio, el panel conserva **la desplegada y la anterior** y borra el resto. Son las dos
+  que la interfaz sabe alcanzar, porque «Rollback» retrocede un único paso. La imagen
+  desplegada y el destino de rollback quedan fijados aparte, así que ninguna retención puede
+  dejar un recurso sin vuelta atrás. Ajustable con `TDM_IMAGE_RETENTION`; `0` la desactiva.
+- **Limpieza masiva de imágenes** con el botón «Limpiar sin usar» y la ruta
+  `POST /api/images/prune`. No es `docker image prune -a`: el panel **conserva las imágenes
+  que siguen siendo el destino de «Rollback» de algún recurso**, porque una versión anterior
+  deja de estar en uso en cuanto se despliega la siguiente y un prune a secas se llevaría
+  justo lo que permite volver atrás. Esas imágenes salen marcadas como «Rollback» en la
+  tabla y solo pueden borrarse una a una, con un aviso explícito.
+
+### Correcciones
+
+- El resumen de la vista de imágenes quedaba pegado a los bordes del panel y la casilla
+  «Solo sin usar» se salía por la derecha.
 
 ### Nuevas funcionalidades
 

@@ -4,6 +4,7 @@
 compile_error!("Tinkiva Docker Manager solo soporta Linux porque utiliza /proc, df y Docker.");
 
 mod app;
+mod aws;
 mod buildpack;
 mod crypto;
 mod daemon;

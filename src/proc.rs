@@ -64,6 +64,24 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_with_input(binary, arguments, working_directory, environment, None, timeout)
+}
+
+/// Igual que [`run`] pero escribiendo `input` en la entrada estándar del hijo.
+/// Es la forma de pasarle un secreto a un comando sin que aparezca en `argv` y,
+/// por tanto, en la salida de `ps` para cualquier usuario del servidor.
+pub fn run_with_input<I, S>(
+    binary: &Path,
+    arguments: I,
+    working_directory: Option<&Path>,
+    environment: &[(&str, &str)],
+    input: Option<&str>,
+    timeout: Duration,
+) -> Result<CommandResult, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let temporary_directory = std::env::temp_dir();
     let suffix = unique_suffix();
     let stdout_path = temporary_directory.join(format!("tdm-{suffix}.stdout"));
@@ -91,7 +109,7 @@ where
     let mut command = Command::new(binary);
     command
         .args(arguments)
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file));
     for (key, value) in environment {
@@ -110,6 +128,15 @@ where
             return Err(format!("no se pudo ejecutar {}: {error}", binary.display()));
         }
     };
+
+    if let Some(input) = input {
+        // El descriptor se cierra al salir del bloque: sin EOF el hijo esperaría
+        // para siempre y el timeout lo mataría sin haber hecho nada.
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(input.as_bytes());
+        }
+    }
 
     let (status, timed_out) = match wait_with_timeout(&mut child, started, timeout) {
         Ok(outcome) => outcome,

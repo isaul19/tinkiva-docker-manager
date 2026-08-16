@@ -20,6 +20,7 @@ elif [[ "$args" == *" image inspect "* ]]; then
     case "$target" in
       *1111111111111111) printf 'sha256:1111111111111111%s142000000\n' "$sep" ;;
       *2222222222222222) printf 'sha256:2222222222222222%s271000000\n' "$sep" ;;
+      *4444444444444444) printf 'sha256:4444444444444444%s64000000\n' "$sep" ;;
       *) printf 'sha256:3333333333333333%s88000000\n' "$sep" ;;
     esac
   done
@@ -27,6 +28,8 @@ elif [[ "$args" == *" images "* ]]; then
   printf 'sha256:1111111111111111%snginx%s1.27%s142MB%s3 weeks ago\n' "$sep" "$sep" "$sep" "$sep"
   printf 'sha256:2222222222222222%spostgres%s17-alpine%s271MB%s2 days ago\n' "$sep" "$sep" "$sep" "$sep"
   printf 'sha256:3333333333333333%s<none>%s<none>%s88MB%s5 months ago\n' "$sep" "$sep" "$sep" "$sep"
+  # Versión anterior del proyecto `demo`: sin contenedor, pero es su rollback.
+  printf 'sha256:4444444444444444%sghcr.io/example/app%sone%s64MB%s1 hour ago\n' "$sep" "$sep" "$sep" "$sep"
 elif [[ "$args" == *" ps -aq "* ]]; then
   printf 'abc123\ndef456\n'
 elif [[ "$args" == *" rmi "* ]]; then

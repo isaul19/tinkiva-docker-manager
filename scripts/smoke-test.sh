@@ -118,11 +118,11 @@ grep -q -- '-- tinkiva: storagia' "$TMP/export.sql"
   "$BASE/api/containers/postgres/export" -d 'mode=all&schemas=--host%3Devil')" == '400' ]]
 
 # Imágenes: se listan con su peso y solo se pueden borrar las que nadie usa.
-curl -fsS "${AUTH[@]}" "$BASE/api/images" | jq -e 'length == 3' >/dev/null
+curl -fsS "${AUTH[@]}" "$BASE/api/images" | jq -e 'length == 4' >/dev/null
 curl -fsS "${AUTH[@]}" "$BASE/api/images" \
   | jq -e '[.[] | select(.reference == "nginx:1.27")][0] | .in_use == true and (.containers | index("app")) != null' >/dev/null
 curl -fsS "${AUTH[@]}" "$BASE/api/images" \
-  | jq -e '[.[] | select(.in_use == false)] | length == 1' >/dev/null
+  | jq -e '[.[] | select(.in_use == false)] | length == 2' >/dev/null
 # Las más pesadas primero y con el tamaño exacto en bytes, no la cifra redondeada.
 curl -fsS "${AUTH[@]}" "$BASE/api/images" \
   | jq -e '.[0].reference == "postgres:17-alpine" and .[0].size_bytes == 271000000' >/dev/null
@@ -130,6 +130,13 @@ curl -fsS "${AUTH[@]}" "$BASE/api/images" | jq -e '.[0].created_since == "2 days
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X DELETE "$BASE/api/images?reference=nginx:1.27")" == '409' ]]
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X DELETE "$BASE/api/images?reference=noexiste:1")" == '404' ]]
 curl -fsS "${AUTH[@]}" -X DELETE "$BASE/api/images?reference=333333333333" | jq -e '.ok == true' >/dev/null
+
+# `demo` desplegó ghcr.io/example/app:one y luego :two, así que :one es su
+# destino de rollback y la limpieza no debe llevárselo por delante.
+curl -fsS "${AUTH[@]}" "$BASE/api/images" \
+  | jq -e '[.[] | select(.reference == "ghcr.io/example/app:one")][0].protected_by == "demo"' >/dev/null
+curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/images/prune" \
+  | jq -e '.ok == true and .kept >= 1 and (.failed | length) == 0' >/dev/null
 
 # La ruta histórica de PostgreSQL debe seguir funcionando igual que antes.
 curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/templates/postgres" \
@@ -174,6 +181,27 @@ curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/database" \
 ! grep -q 'TDM_MEMORY_LIMIT' "$TMP/apps/demo-sin-limite/.env"
 grep -q 'no-new-privileges:true' "$TMP/apps/demo-sin-limite/compose.yaml"
 curl -fsS "${AUTH[@]}" -X DELETE "$BASE/api/projects/demo-sin-limite?remove=all" >/dev/null
+
+# Sin ECR conectado el estado debe decirlo, y las credenciales inválidas se
+# rechazan antes de tocar la red.
+curl -fsS "${AUTH[@]}" "$BASE/api/ecr" | jq -e '.connected == false' >/dev/null
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/ecr" \
+  --data-urlencode 'access_key_id=AKIA;rm -rf /' --data-urlencode 'secret_access_key=x' \
+  --data-urlencode 'region=us-east-1')" == '422' ]]
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/ecr" \
+  --data-urlencode 'access_key_id=AKIAIOSFODNN7EXAMPLE' --data-urlencode 'secret_access_key=x' \
+  --data-urlencode 'region=US-EAST-1')" == '422' ]]
+
+# Un recurso Compose puede declarar la imagen que debe vigilar el watcher.
+curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/compose" \
+  --data-urlencode 'slug=demo-ecr' \
+  --data-urlencode 'name=Demo ECR' \
+  --data-urlencode 'watch_image=123456789012.dkr.ecr.us-east-1.amazonaws.com/api:latest' \
+  --data-urlencode 'compose=services:
+  app:
+    image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/api:latest
+' | jq -e '.current_image == "123456789012.dkr.ecr.us-east-1.amazonaws.com/api:latest" and .auto_deploy == true' >/dev/null
+curl -fsS "${AUTH[@]}" -X DELETE "$BASE/api/projects/demo-ecr?remove=all" >/dev/null
 
 # Sin GitHub App conectada el estado debe decirlo sin romperse.
 curl -fsS "${AUTH[@]}" "$BASE/api/github" | jq -e '.connected == false' >/dev/null

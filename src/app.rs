@@ -1,10 +1,13 @@
 use crate::docker::{self, DockerClient};
 use crate::git::GitClient;
+use crate::aws::{self, Ecr, EcrCredentials};
 use crate::github::GitHub;
 use crate::http::{Request, Response};
 use crate::json::Json;
 use crate::metrics::{collect_processes, processes_to_json, HostMetrics};
-use crate::model::{Deployment, Project, KIND_DATABASE, KIND_IMAGE, KIND_REPOSITORY};
+use crate::model::{
+    Deployment, Project, KIND_COMPOSE, KIND_DATABASE, KIND_IMAGE, KIND_REPOSITORY,
+};
 use crate::proc::CommandResult;
 use crate::store::Store;
 use crate::templates::{self, GeneratedResource};
@@ -38,6 +41,9 @@ pub struct Config {
     pub git_binary: PathBuf,
     pub workers: usize,
     pub max_history: usize,
+    /// Builds de repositorio que se conservan por proyecto. 0 desactiva la
+    /// limpieza automática.
+    pub image_retention: usize,
     pub poll_interval_seconds: u64,
 }
 
@@ -91,6 +97,12 @@ impl Config {
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(200)
             .clamp(10, 10_000);
+        // Dos: la que corre y la anterior. Son exactamente las que el panel
+        // sabe alcanzar, porque «Rollback» solo retrocede un paso.
+        let image_retention = setting("TDM_IMAGE_RETENTION")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(2)
+            .min(100);
         let poll_interval_seconds = setting("TDM_POLL_INTERVAL_SECONDS")
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(60)
@@ -106,6 +118,7 @@ impl Config {
             git_binary: PathBuf::from(setting("TDM_GIT_BIN").unwrap_or_else(|| "git".to_owned())),
             workers,
             max_history,
+            image_retention,
             poll_interval_seconds,
         })
     }
@@ -135,6 +148,7 @@ pub struct App {
     docker: DockerClient,
     git: GitClient,
     github: GitHub,
+    ecr: Ecr,
     capabilities: Capabilities,
     deploy_lock: Mutex<()>,
     started_at: u64,
@@ -144,6 +158,7 @@ impl App {
     pub fn new(config: Config) -> Result<Self, String> {
         let store = Store::load(config.data_dir.join("state.db"), config.max_history)?;
         let github = GitHub::load(config.data_dir.join("github.json"))?;
+        let ecr = Ecr::load(config.data_dir.join("ecr.conf"))?;
         let docker = DockerClient::new(config.docker_binary.clone());
         let git = GitClient::new(config.git_binary.clone());
         let capabilities = Capabilities {
@@ -158,6 +173,7 @@ impl App {
             docker,
             git,
             github,
+            ecr,
             capabilities,
             deploy_lock: Mutex::new(()),
             started_at: now_unix(),
@@ -180,9 +196,13 @@ impl App {
         };
 
         for project in projects.into_iter().filter(|project| project.auto_deploy) {
+            // Un recurso Compose se vigila si declara qué imagen observar: es lo
+            // que permite auto-desplegar lo que GitLab acaba de subir a ECR.
+            let watches_registry = project.kind == KIND_IMAGE
+                || (project.kind == KIND_COMPOSE && project.current_image.is_some());
             let changed = if project.kind == KIND_REPOSITORY {
                 self.repository_changed(&project)
-            } else if project.kind == KIND_IMAGE {
+            } else if watches_registry {
                 self.registry_image_changed(&project)
             } else {
                 continue;
@@ -233,6 +253,7 @@ impl App {
 
     fn registry_image_changed(&self, project: &Project) -> Result<Option<String>, String> {
         let image = project.current_image.as_deref().ok_or("falta la imagen")?;
+        self.ensure_registry_login(Some(image));
         let pull = self.docker.pull_image(image)?;
         if !pull.success {
             return Err(format!("no se pudo consultar {image}: {}", pull.summary()));
@@ -318,6 +339,7 @@ impl App {
             }
             ("GET", ["api", "images"]) => self.list_images(),
             ("DELETE", ["api", "images"]) => self.delete_image(request),
+            ("POST", ["api", "images", "prune"]) => self.prune_images(),
             ("GET", ["api", "projects"]) => self.list_projects(),
             ("POST", ["api", "projects"]) => self.create_project(request),
             ("DELETE", ["api", "projects", slug]) => self.delete_project(slug, request),
@@ -334,6 +356,10 @@ impl App {
             ("POST", ["api", "projects", slug, "rollback"]) => self.rollback_project(slug),
             ("GET", ["api", "history"]) => self.history(request),
             ("GET", ["api", "history", "page"]) => self.history_page(request),
+
+            ("GET", ["api", "ecr"]) => self.ecr_status(),
+            ("POST", ["api", "ecr"]) => self.ecr_connect(request),
+            ("DELETE", ["api", "ecr"]) => self.ecr_disconnect(),
 
             ("GET", ["api", "github"]) => self.github_status(request),
             ("DELETE", ["api", "github"]) => self.github_disconnect(),
@@ -466,8 +492,38 @@ impl App {
         }
     }
 
+    /// Imágenes que hay que conservar aunque ningún contenedor las use: son el
+    /// destino de «Rollback» de algún recurso. Un despliegue anterior deja de
+    /// estar en uso en cuanto se sustituye, así que sin esta protección la
+    /// limpieza se llevaría justo lo que permite volver atrás.
+    fn rollback_images(&self) -> HashMap<String, String> {
+        let mut protected = HashMap::new();
+        let Ok(projects) = self.store.projects() else {
+            return protected;
+        };
+        for project in projects {
+            if let Some(image) = project.current_image.clone() {
+                protected.insert(image, project.slug.clone());
+            }
+            if let Ok(Some(image)) = self.store.rollback_target(&project.slug) {
+                protected.insert(image, project.slug.clone());
+            }
+        }
+        protected
+    }
+
+    /// Imágenes del host con la marca de rollback ya aplicada.
+    fn images_with_protection(&self) -> Result<Vec<crate::docker::ImageInfo>, String> {
+        let mut images = self.docker.images()?;
+        let protected = self.rollback_images();
+        for image in &mut images {
+            image.protected_by = protected.get(&image.reference).cloned();
+        }
+        Ok(images)
+    }
+
     fn list_images(&self) -> Response {
-        match self.docker.images() {
+        match self.images_with_protection() {
             Ok(images) => Response::json(
                 200,
                 format!(
@@ -490,7 +546,7 @@ impl App {
         let Some(reference) = request.query.get("reference").map(String::as_str) else {
             return json_error(400, "indica la imagen a borrar");
         };
-        let images = match self.docker.images() {
+        let images = match self.images_with_protection() {
             Ok(images) => images,
             Err(error) => return json_error(503, &error),
         };
@@ -521,6 +577,58 @@ impl App {
             Ok(result) => json_error(502, &result.summary()),
             Err(error) => json_error(502, &error),
         }
+    }
+
+    /// Borra de una vez todas las imágenes que ningún contenedor usa, salvo las
+    /// que siguen siendo el rollback de algún recurso. No es `docker image
+    /// prune -a`: ese se llevaría también esas versiones anteriores.
+    fn prune_images(&self) -> Response {
+        let images = match self.images_with_protection() {
+            Ok(images) => images,
+            Err(error) => return json_error(503, &error),
+        };
+
+        let mut removed = Vec::new();
+        let mut failed = Vec::new();
+        let mut freed_ids: HashMap<String, u64> = HashMap::new();
+        let mut kept = 0_usize;
+
+        for image in images.iter().filter(|image| image.containers.is_empty()) {
+            if image.protected_by.is_some() {
+                kept += 1;
+                continue;
+            }
+            match self.docker.remove_image(&image.reference) {
+                Ok(result) if result.success => {
+                    freed_ids.insert(image.id.clone(), image.size_bytes);
+                    removed.push(image.reference.clone());
+                }
+                Ok(result) => failed.push(format!("{}: {}", image.reference, result.summary())),
+                Err(error) => failed.push(format!("{}: {error}", image.reference)),
+            }
+        }
+
+        // El espacio se cuenta por id: dos etiquetas de la misma imagen no
+        // liberan el doble.
+        let freed: u64 = freed_ids.values().sum();
+        let message = if removed.is_empty() {
+            "No había imágenes sin usar que borrar.".to_owned()
+        } else {
+            format!("{} imagen(es) eliminada(s).", removed.len())
+        };
+        Response::json(
+            200,
+            format!(
+                "{{\"ok\":true,\"removed\":{},\"kept\":{kept},\"freed_bytes\":{freed},\"failed\":[{}],\"message\":{}}}",
+                removed.len(),
+                failed
+                    .iter()
+                    .map(|error| json_string(error))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                json_string(&message),
+            ),
+        )
     }
 
     fn container_logs(&self, container: &str, request: &Request) -> Response {
@@ -1358,6 +1466,11 @@ impl App {
         };
 
         let started = Instant::now();
+        // Antes de que Compose intente el pull: si la imagen es de ECR hay que
+        // llevar el `docker login` al día.
+        self.ensure_registry_login(
+            image.as_deref().or(project.current_image.as_deref()),
+        );
         let requested_image = image.clone();
         let mut previous_image = project.current_image.clone();
         let mut env_target: Option<(PathBuf, String)> = None;
@@ -1478,6 +1591,8 @@ impl App {
             }
         }
 
+        let slug = project.slug.clone();
+        let kind = project.kind.clone();
         let deployment = Deployment {
             id: 0,
             project: project.slug,
@@ -1496,10 +1611,57 @@ impl App {
             .append_deployment(deployment)
             .map_err(|error| ApiError::new(500, error))?;
 
+        // El historial ya está escrito, así que aquí `rollback_target` ve el
+        // estado definitivo y la limpieza sabe qué imagen debe respetar.
+        if success && kind == KIND_REPOSITORY {
+            self.trim_build_images(&slug);
+        }
+
         Ok(DeployOutcome {
             success,
             deployment,
         })
+    }
+
+    /// Borra las imágenes viejas que el panel construyó para un repositorio.
+    ///
+    /// Cada push deja una etiqueta `tinkiva/<slug>:<commit>` y sin esto se
+    /// acumulan indefinidamente. Se conservan las `image_retention` más
+    /// recientes y, pase lo que pase, la imagen desplegada y el destino de
+    /// «Rollback».
+    ///
+    /// Por omisión son dos, que son justo las que el panel sabe alcanzar:
+    /// `rollback_target` retrocede un único paso, así que una tercera imagen no
+    /// tendría desde dónde recuperarse y solo ocuparía disco.
+    fn trim_build_images(&self, slug: &str) {
+        let retention = self.config.image_retention;
+        if retention == 0 {
+            return;
+        }
+        let repository = format!("tinkiva/{slug}");
+        let builds = match self.docker.repository_images(&repository) {
+            Ok(builds) => builds,
+            Err(error) => {
+                eprintln!("limpieza {slug}: no se pudieron listar las imágenes: {error}");
+                return;
+            }
+        };
+
+        let mut pinned = Vec::new();
+        if let Ok(Some(project)) = self.store.project(slug) {
+            pinned.extend(project.current_image);
+        }
+        if let Ok(Some(target)) = self.store.rollback_target(slug) {
+            pinned.push(target);
+        }
+
+        for stale in stale_builds(&builds, retention, &pinned) {
+            match self.docker.remove_image(&stale) {
+                Ok(result) if result.success => {}
+                Ok(result) => eprintln!("limpieza {slug}: {} sigue ahí: {}", stale, result.summary()),
+                Err(error) => eprintln!("limpieza {slug}: {stale}: {error}"),
+            }
+        }
     }
 
     fn history(&self, request: &Request) -> Response {
@@ -1554,6 +1716,95 @@ impl App {
                 ),
             ),
             Err(error) => json_error(500, &error),
+        }
+    }
+
+    // ── Amazon ECR ─────────────────────────────────────────────────────────
+
+    fn ecr_status(&self) -> Response {
+        match self.ecr.status_json() {
+            Ok(body) => Response::json(200, body),
+            Err(error) => json_error(500, &error),
+        }
+    }
+
+    /// Guarda las credenciales solo si sirven: primero pide el token a AWS y
+    /// hace el `docker login`. Así el usuario se entera del error de permisos
+    /// aquí y no meses después, en mitad de un despliegue.
+    fn ecr_connect(&self, request: &Request) -> Response {
+        if !self.capabilities.curl {
+            return json_error(503, "curl no está instalado; no se puede hablar con AWS");
+        }
+        let fields = match request.form() {
+            Ok(fields) => fields,
+            Err(error) => return json_error(400, &error),
+        };
+        let access_key_id = field(&fields, "access_key_id");
+        let secret_access_key = field(&fields, "secret_access_key");
+        let region = field(&fields, "region");
+        let registry_id = field(&fields, "registry_id");
+
+        if !aws::valid_access_key(access_key_id) {
+            return json_error(422, "access key id inválido");
+        }
+        if secret_access_key.is_empty() || secret_access_key.len() > 256 {
+            return json_error(422, "secret access key inválido");
+        }
+        if !aws::valid_region(region) {
+            return json_error(422, "región inválida, por ejemplo us-east-1");
+        }
+        if !aws::valid_registry_id(registry_id) {
+            return json_error(422, "el id de registro son los 12 dígitos de la cuenta");
+        }
+
+        let credentials = EcrCredentials {
+            access_key_id: access_key_id.to_owned(),
+            secret_access_key: secret_access_key.to_owned(),
+            region: region.to_owned(),
+            registry_id: registry_id.to_owned(),
+            connected_at: 0,
+        };
+        let token = match self.ecr.connect(credentials) {
+            Ok(token) => token,
+            Err(error) => return json_error(502, &error),
+        };
+        if let Err(error) = self
+            .docker
+            .login(&token.registry, &token.username, &token.password)
+        {
+            return json_error(502, &format!("AWS respondió, pero docker login falló: {error}"));
+        }
+        self.ecr_status()
+    }
+
+    fn ecr_disconnect(&self) -> Response {
+        if let Ok(Some(credentials)) = self.ecr.credentials() {
+            let _ = self.docker.logout(&credentials.registry_host());
+        }
+        match self.ecr.disconnect() {
+            Ok(()) => Response::json(200, "{\"connected\":false}".to_owned()),
+            Err(error) => json_error(500, &error),
+        }
+    }
+
+    /// Renueva el `docker login` si la imagen vive en el ECR conectado. El token
+    /// de AWS dura doce horas, así que sin esto los despliegues empezarían a
+    /// fallar solos a mitad del día.
+    fn ensure_registry_login(&self, image: Option<&str>) {
+        let Some(image) = image else { return };
+        if !self.ecr.owns_image(image) {
+            return;
+        }
+        match self.ecr.token() {
+            Ok(token) => {
+                if let Err(error) = self
+                    .docker
+                    .login(&token.registry, &token.username, &token.password)
+                {
+                    eprintln!("ecr: no se pudo renovar el acceso: {error}");
+                }
+            }
+            Err(error) => eprintln!("ecr: no se pudo pedir el token: {error}"),
         }
     }
 
@@ -2064,7 +2315,17 @@ impl App {
             Ok(token) => token,
             Err(error) => return abort(format!("no se pudo crear token: {error}"), 500),
         };
-        let project = Project::compose(slug.to_owned(), name.trim().to_owned(), compose_file, webhook_token, now_unix());
+        let mut project = Project::compose(slug.to_owned(), name.trim().to_owned(), compose_file, webhook_token, now_unix());
+        // Declarar qué imagen vigilar es lo que convierte un Compose en un
+        // recurso con auto-deploy: el watcher comprueba su digest y redespliega
+        // cuando el registro publica una versión nueva.
+        if let Some(image) = optional_field(&fields, "watch_image") {
+            if !valid_image_ref(image) {
+                return abort("referencia de imagen inválida".to_owned(), 422);
+            }
+            project.current_image = Some(image.to_owned());
+            project.auto_deploy = field(&fields, "auto_deploy") != "false";
+        }
         match self.store.add_project(project.clone()) {
             Ok(()) => Response::json(201, project.to_json(true)),
             Err(error) => abort(error, 409),
@@ -2497,6 +2758,21 @@ fn valid_relative_path(value: &str) -> bool {
         })
 }
 
+/// Builds que sobran, dado el listado de más reciente a más antiguo. Conserva
+/// las `retention` primeras y nunca devuelve una imagen fijada, aunque sea vieja:
+/// la desplegada y la de rollback tienen que sobrevivir a cualquier retención.
+fn stale_builds(builds: &[String], retention: usize, pinned: &[String]) -> Vec<String> {
+    if retention == 0 {
+        return Vec::new();
+    }
+    builds
+        .iter()
+        .skip(retention)
+        .filter(|build| !pinned.contains(build))
+        .cloned()
+        .collect()
+}
+
 fn json_optional_secret(secret: Option<&str>) -> String {
     secret.map_or_else(|| "null".to_owned(), json_string)
 }
@@ -2558,6 +2834,31 @@ mod tests {
         assert!(!valid_relative_path("../Dockerfile"));
         assert!(!valid_relative_path("a/../../b"));
         assert!(!valid_relative_path(""));
+    }
+
+    #[test]
+    fn build_retention_keeps_the_newest_and_never_drops_the_rollback() {
+        let builds: Vec<String> = ["app:e5", "app:d4", "app:c3", "app:b2", "app:a1"]
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect();
+
+        // Por omisión sobreviven la desplegada y la anterior; el resto sobra.
+        assert_eq!(
+            stale_builds(&builds, 2, &[]),
+            vec!["app:c3".to_owned(), "app:b2".to_owned(), "app:a1".to_owned()]
+        );
+
+        // Salvo que alguna siga siendo el destino de rollback.
+        assert_eq!(
+            stale_builds(&builds, 2, &["app:a1".to_owned()]),
+            vec!["app:c3".to_owned(), "app:b2".to_owned()]
+        );
+
+        // Retención 0 desactiva la limpieza; una retención mayor que el listado
+        // no borra nada.
+        assert!(stale_builds(&builds, 0, &[]).is_empty());
+        assert!(stale_builds(&builds, 10, &[]).is_empty());
     }
 
     #[test]

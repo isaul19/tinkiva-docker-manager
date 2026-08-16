@@ -4,6 +4,7 @@ import {
   Boxes,
   Container,
   Cpu,
+  Cloud,
   Github,
   HardDrive,
   History,
@@ -23,6 +24,7 @@ import { Containers } from './Containers.jsx';
 import { Processes } from './Processes.jsx';
 import { Resources } from './Resources.jsx';
 import { Deployments } from './Deployments.jsx';
+import { EcrView } from './EcrView.jsx';
 import { GitHubView } from './GitHubView.jsx';
 import { Images } from './Images.jsx';
 import { System } from './System.jsx';
@@ -41,7 +43,10 @@ const SECTIONS = [
   },
   {
     label: 'Integraciones',
-    items: [{ id: 'github', title: 'GitHub', kicker: 'ORÍGENES', icon: Github }],
+    items: [
+      { id: 'github', title: 'GitHub', kicker: 'ORÍGENES', icon: Github },
+      { id: 'ecr', title: 'Amazon ECR', kicker: 'REGISTROS', icon: Cloud },
+    ],
   },
   {
     label: 'Servidor',
@@ -59,6 +64,7 @@ const PAGES = {
   images: Images,
   deployments: Deployments,
   github: GitHubView,
+  ecr: EcrView,
   processes: Processes,
   system: System,
 };

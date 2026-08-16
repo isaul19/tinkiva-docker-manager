@@ -1185,17 +1185,25 @@ code {
   font-weight: 620;
 }
 
+/* `.table-panel` no tiene padding para que la tabla llegue a los bordes, así
+   que el resumen pone el suyo o queda pegado al borde del panel. */
 .table-summary {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  margin-bottom: 0.7rem;
+  padding: 0.85rem 1rem 0;
 }
 
 .table-summary p {
   margin: 0;
+}
+
+.table-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
 }
 
 /* ── Exportación de bases de datos ──────────────────────────────────────── */

@@ -239,10 +239,27 @@ fn validate_url(url: &str) -> Result<(), String> {
     if authority.contains(':') {
         return Err("no se permite especificar puerto".to_owned());
     }
-    if !ALLOWED_HOSTS.contains(&authority) {
+    if !ALLOWED_HOSTS.contains(&authority) && !is_ecr_api_host(authority) {
         return Err(format!("host no permitido: {authority}"));
     }
     Ok(())
+}
+
+/// `api.ecr.<region>.amazonaws.com`. La región no se puede meter en la lista
+/// blanca fija porque depende de la cuenta, así que se valida su forma: solo
+/// minúsculas, dígitos y guiones, sin puntos que permitan saltar de dominio.
+fn is_ecr_api_host(authority: &str) -> bool {
+    let Some(region) = authority
+        .strip_prefix("api.ecr.")
+        .and_then(|rest| rest.strip_suffix(".amazonaws.com"))
+    else {
+        return false;
+    };
+    !region.is_empty()
+        && region.len() <= 24
+        && region
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 /// Indica si `curl` está disponible; el panel lo usa para avisar en la interfaz
@@ -281,6 +298,17 @@ mod tests {
         assert!(validate_url("https://api.github.com.evil.com/x").is_err());
         assert!(validate_url("https://user:pass@api.github.com/x").is_err());
         assert!(validate_url("https://api.github.com:8443/x").is_err());
+    }
+
+    #[test]
+    fn allows_the_ecr_api_of_any_region_but_no_lookalikes() {
+        assert!(validate_url("https://api.ecr.us-east-1.amazonaws.com/").is_ok());
+        assert!(validate_url("https://api.ecr.sa-east-1.amazonaws.com/").is_ok());
+        // Un punto extra permitiría colarse a otro dominio.
+        assert!(validate_url("https://api.ecr.evil.com.amazonaws.com/").is_err());
+        assert!(validate_url("https://api.ecr..amazonaws.com/").is_err());
+        assert!(validate_url("https://api.ecr.us-east-1.amazonaws.com.evil.com/").is_err());
+        assert!(validate_url("https://ecr.us-east-1.amazonaws.com/").is_err());
     }
 
     #[test]

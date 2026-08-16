@@ -10,7 +10,7 @@ export function ComposeTextForm({ onCreated }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [slugTouched, setSlugTouched] = useState(false);
-  const [form, setForm] = useState({ name: '', slug: '', compose: '' });
+  const [form, setForm] = useState({ name: '', slug: '', compose: '', watch_image: '' });
 
   const update = (key) => (event) =>
     setForm((current) => ({ ...current, [key]: event.currentTarget.value }));
@@ -49,6 +49,17 @@ export function ComposeTextForm({ onCreated }) {
       </Field>
       <Field label="Slug" hint="Minúsculas, números y guiones; se usa para crear la carpeta del recurso.">
         <Input value={form.slug} onInput={(event) => { setSlugTouched(true); update('slug')(event); }} required pattern="[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?" placeholder="mi-aplicacion" />
+      </Field>
+      <Field
+        label="Imagen a vigilar (opcional)"
+        hint="Si la indicas, el panel comprueba su digest cada pocos minutos y redespliega cuando cambie. Útil con ECR o GHCR."
+        wide
+      >
+        <Input
+          value={form.watch_image}
+          onInput={update('watch_image')}
+          placeholder="123456789012.dkr.ecr.us-east-1.amazonaws.com/api:latest"
+        />
       </Field>
       <Field label="docker-compose.yml" hint="YAML válido para Docker Compose; máximo 128 KiB." wide>
         <TextArea rows={16} spellcheck={false} value={form.compose} onInput={update('compose')} required placeholder={'services:\n  app:\n    image: nginx:alpine\n    ports:\n      - "8080:80"'} />

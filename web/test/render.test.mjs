@@ -196,6 +196,7 @@ const API = {
     webhook_url: null,
   },
   '/api/github/installations': [],
+  '/api/ecr': { connected: false },
   '/api/images': [
     {
       id: '111111111111',
@@ -206,6 +207,7 @@ const API = {
       size_bytes: 431_000_000,
       created_since: '3 weeks ago',
       in_use: true,
+      protected_by: null,
       containers: ['storagia-postgres'],
     },
     {
@@ -217,6 +219,19 @@ const API = {
       size_bytes: 142_000_000,
       created_since: '2 days ago',
       in_use: false,
+      protected_by: null,
+      containers: [],
+    },
+    {
+      id: '333333333333',
+      reference: 'tinkiva/storagia-api:sha-abc',
+      repository: 'tinkiva/storagia-api',
+      tag: 'sha-abc',
+      size: '95MB',
+      size_bytes: 95_000_000,
+      created_since: '1 hour ago',
+      in_use: false,
+      protected_by: 'storagia-api',
       containers: [],
     },
   ],
@@ -528,16 +543,32 @@ test('la vista de imágenes marca cuáles están en uso y bloquea su borrado', a
   assert.match(text, /En uso/);
   assert.match(text, /storagia-postgres/, 'debe decir qué contenedor la usa');
   assert.match(text, /Sin usar/);
-  assert.match(text, /2 imágenes/);
-  assert.match(text, /546 MB.*en disco/s, 'total por id único');
-  assert.match(text, /135 MB.*recuperables/s);
+  assert.match(text, /3 imágenes/);
+  assert.match(text, /637 MB.*en disco/s, 'total por id único');
+  assert.match(text, /226 MB.*recuperables/s);
 
   const rows = [...app.document.querySelectorAll('tbody tr')];
-  assert.equal(rows.length, 2);
+  assert.equal(rows.length, 3);
   const inUse = rows.find((row) => row.textContent.includes('pgvector'));
   const free = rows.find((row) => row.textContent.includes('nginx'));
   assert.ok(inUse.querySelector('button').disabled, 'la imagen en uso no se puede borrar');
   assert.ok(!free.querySelector('button').disabled, 'la imagen sin usar sí');
+});
+
+test('la limpieza masiva respeta las imágenes de rollback', async () => {
+  const app = await mount({ token: 'x'.repeat(40), hash: '#/images' });
+
+  // La versión anterior de un recurso se marca aparte, no como «sin usar».
+  const rows = [...app.document.querySelectorAll('tbody tr')];
+  const rollback = rows.find((row) => row.textContent.includes('tinkiva/storagia-api'));
+  assert.match(rollback.textContent, /Rollback/);
+  assert.match(rollback.textContent, /versión anterior de storagia-api/);
+
+  await app.click('button', 'Limpiar sin usar');
+  const text = app.currentText();
+  assert.match(text, /Borrar 1 imagen\(es\) sin usar/, 'solo cuenta la que no es rollback');
+  assert.match(text, /Se conservan/);
+  assert.match(text, /botón «Rollback»/);
 });
 
 test('el formulario de base de datos deshabilita la RAM al marcar sin límite', async () => {
@@ -554,6 +585,20 @@ test('el formulario de base de datos deshabilita la RAM al marcar sin límite', 
   const after = app.document.querySelector('input[type=number][max="16384"]');
   assert.ok(after.disabled, 'al marcar sin límite el campo se deshabilita');
   assert.match(app.currentText(), /toda la memoria disponible del VPS/);
+});
+
+test('Amazon ECR aparece en integraciones y pide unas claves de solo lectura', async () => {
+  const app = await mount({ token: 'x'.repeat(40), hash: '#/ecr' });
+  const text = app.currentText();
+  assert.match(text, /Integraciones/);
+  assert.match(text, /Amazon ECR/);
+  assert.match(text, /Access key ID/);
+  assert.match(text, /Secret access key/);
+  assert.match(text, /ecr:GetAuthorizationToken/, 'debe mostrar la política mínima');
+  assert.doesNotMatch(text, /ecr:PutImage/, 'el panel no necesita permisos de escritura');
+
+  const secret = app.document.querySelector('input[type=password]');
+  assert.ok(secret, 'el secret no debe escribirse en claro');
 });
 
 let failures = 0;
