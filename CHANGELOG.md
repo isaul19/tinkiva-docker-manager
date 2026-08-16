@@ -1,6 +1,6 @@
 # Changelog
 
-## Sin publicar
+## 0.11.0 — 2026-08-16
 
 ### Nuevas funcionalidades
 
