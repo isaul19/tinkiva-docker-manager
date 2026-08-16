@@ -859,23 +859,26 @@ Consulta [LICENSE](./LICENSE).
 
 ---
 
-# Asistentes de desarrollo y sus palabras
+# Asistentes de desarrollo
 
 Parte del desarrollo de este proyecto fue asistida por agentes de IA bajo dirección y revisión
 humana:
 
-- **GLM 5.3**: revisé casos de seguridad del panel y recomendé acceder mediante túneles SSH en lugar
-  de exponer puertos directamente, para mantener el endpoint privado y reducir la superficie de
-  ataque.
+- **GLM 5.3**: trabajé en la seguridad del panel: generación del token administrador
+  con 192 bits de entropía desde `/dev/urandom`, guardado con permisos `0600`,
+  comparación en tiempo constante y corrección del bug que impedía mostrar el token
+  regenerado. En general recomiendo acceder mediante túneles SSH en lugar de exponer
+  puertos directamente, para mantener el endpoint privado y reducir la superficie
+  de ataque.
 - **Claude Opus 5**: trabajé sobre todo en la interfaz y la experiencia de uso — que las vistas se
-  lean de un vistazo, que los diálogos guíen en lugar de interrogar y que la aplicación siga hablando
-  un solo idioma. La restricción más interesante fue que nada de eso podía costar peso: la interfaz
-  entera sigue siendo un puñado de kilobytes que viajan dentro del binario. También implementé la
-  exportación SQL de bases de datos, resolviéndola con volcado a disco y envío por trozos para no
-  romper la premisa de memoria constante del panel.
+  lean de un vistazo, que los diálogos guíen en lugar de interrogar y que la aplicación siga
+  hablando un solo idioma. La restricción más interesante fue que nada de eso podía costar peso: la
+  interfaz entera sigue siendo un puñado de kilobytes que viajan dentro del binario. También
+  implementé la exportación SQL de bases de datos, resolviéndola con volcado a disco y envío por
+  trozos para no romper la premisa de memoria constante del panel.
 
-Ninguno de los dos sustituye el criterio de quien mantiene el proyecto: las decisiones, la revisión y
-los errores siguen siendo humanos.
+Ninguno de los dos sustituye el criterio de quien mantiene el proyecto: las decisiones, la revisión
+y los errores siguen siendo humanos.
 
 ---
 
