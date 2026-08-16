@@ -5,6 +5,7 @@ import {
   Container,
   Cpu,
   Github,
+  HardDrive,
   History,
   LogOut,
   Plus,
@@ -23,6 +24,7 @@ import { Processes } from './Processes.jsx';
 import { Resources } from './Resources.jsx';
 import { Deployments } from './Deployments.jsx';
 import { GitHubView } from './GitHubView.jsx';
+import { Images } from './Images.jsx';
 import { System } from './System.jsx';
 import { AddResource } from '../resources/AddResource.jsx';
 
@@ -33,6 +35,7 @@ const SECTIONS = [
       { id: 'dashboard', title: 'Resumen', kicker: 'OPERACIONES', icon: Activity },
       { id: 'resources', title: 'Recursos', kicker: 'PROYECTOS', icon: Boxes },
       { id: 'containers', title: 'Contenedores', kicker: 'DOCKER', icon: Container },
+      { id: 'images', title: 'Imágenes', kicker: 'DOCKER', icon: HardDrive },
       { id: 'deployments', title: 'Despliegues', kicker: 'ACTIVIDAD', icon: History },
     ],
   },
@@ -53,6 +56,7 @@ const PAGES = {
   dashboard: Dashboard,
   resources: Resources,
   containers: Containers,
+  images: Images,
   deployments: Deployments,
   github: GitHubView,
   processes: Processes,

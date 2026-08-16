@@ -2,6 +2,31 @@
 
 ## Sin publicar
 
+### Nuevas funcionalidades
+
+- **Vista de imágenes**: lista paginada de las imágenes locales con su peso exacto, su
+  antigüedad, su id y qué contenedores las usan; incluye el total en disco, cuánto es
+  recuperable y un filtro «solo sin usar». Ordena de mayor a menor, que es como se busca
+  espacio. Nuevas rutas `GET /api/images` y `DELETE /api/images?reference=`. El borrado nunca
+  usa `--force` y el uso se vuelve a comprobar en el servidor justo antes de eliminar,
+  contando también los contenedores detenidos: borrar su imagen los dejaría sin arrancar.
+- **«Sin límite de RAM»** al crear recursos. Docker no obliga a fijar un límite, así que el
+  panel tampoco: al marcar la casilla el Compose se genera sin `mem_limit` y el `.env` sin
+  `TDM_MEMORY_LIMIT`. Llega desactivada a propósito, porque en un VPS pequeño un contenedor
+  sin techo puede dejar sin memoria al resto.
+
+### Cambios
+
+- **Se retiró el origen «Imagen de Docker Hub»**. Para levantar una imagen suelta de cualquier
+  registro se usa «Crear Docker Compose», que además deja el YAML editable.
+
+  Con él desaparece todo lo que solo existía para servirlo: el módulo `registry` completo
+  (búsqueda y etiquetas de Docker Hub), los endpoints `GET /api/registry/search`,
+  `GET /api/registry/tags` y `POST /api/resources/image`, el campo `popular_images` de
+  `/api/catalog` y la plantilla de servicio desde imagen. **Es un cambio incompatible para
+  quien llamara a esos endpoints.** Los recursos de tipo `image` ya creados siguen
+  funcionando, desplegándose y haciendo rollback igual que antes.
+
 ### Mejoras
 
 - La consola de contenedores baja sola al ejecutar: la salida nueva queda a la vista sin

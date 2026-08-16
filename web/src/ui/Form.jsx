@@ -35,6 +35,36 @@ export function Select({ options = [], ...rest }) {
   );
 }
 
+/**
+ * Casilla «Sin límite de RAM». Docker no obliga a fijar un límite y el panel
+ * tampoco debería, pero llega desactivada a propósito: en un VPS pequeño un
+ * contenedor sin techo puede dejar sin memoria al resto del servidor.
+ */
+export function MemoryUnlimited({ checked, onChange, engine }) {
+  const warning =
+    engine === 'Redis'
+      ? 'Redis puede crecer hasta agotar la RAM del VPS; conviene mantener el límite.'
+      : 'Docker no obliga a poner un límite, pero en un servidor pequeño conviene mantenerlo.';
+
+  return (
+    <label class={`exposure-option${checked ? ' is-public' : ''}`}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.currentTarget.checked)}
+      />
+      <span class="exposure-copy">
+        <strong>Sin límite de RAM</strong>
+        <span class="field-hint">
+          {checked
+            ? 'El contenedor podrá usar toda la memoria disponible del VPS. Puede afectar a otros servicios.'
+            : warning}
+        </span>
+      </span>
+    </label>
+  );
+}
+
 export function FormGrid({ children, columns = 2 }) {
   return <div class={`form-grid form-grid-${columns}`}>{children}</div>;
 }

@@ -15,6 +15,22 @@ elif [[ "$args" == *" ps -a "* ]]; then
 elif [[ "$args" == *" stats --no-stream "* ]]; then
   printf 'app%s1.20%%%s48MiB / 384MiB%s12.50%%%s1kB / 2kB%s0B / 0B%s8\n' "$sep" "$sep" "$sep" "$sep" "$sep" "$sep"
   printf 'postgres%s0.20%%%s92MiB / 512MiB%s17.97%%%s2kB / 3kB%s0B / 0B%s12\n' "$sep" "$sep" "$sep" "$sep" "$sep" "$sep"
+elif [[ "$args" == *" image inspect "* ]]; then
+  for target in "${@:5}"; do
+    case "$target" in
+      *1111111111111111) printf 'sha256:1111111111111111%s142000000\n' "$sep" ;;
+      *2222222222222222) printf 'sha256:2222222222222222%s271000000\n' "$sep" ;;
+      *) printf 'sha256:3333333333333333%s88000000\n' "$sep" ;;
+    esac
+  done
+elif [[ "$args" == *" images "* ]]; then
+  printf 'sha256:1111111111111111%snginx%s1.27%s142MB%s3 weeks ago\n' "$sep" "$sep" "$sep" "$sep"
+  printf 'sha256:2222222222222222%spostgres%s17-alpine%s271MB%s2 days ago\n' "$sep" "$sep" "$sep" "$sep"
+  printf 'sha256:3333333333333333%s<none>%s<none>%s88MB%s5 months ago\n' "$sep" "$sep" "$sep" "$sep"
+elif [[ "$args" == *" ps -aq "* ]]; then
+  printf 'abc123\ndef456\n'
+elif [[ "$args" == *" rmi "* ]]; then
+  printf 'Untagged: %s\n' "${*: -1}"
 elif [[ "$args" == *" inspect --format "* ]]; then
   # Solo `postgres` se comporta como base de datos; el resto no debe superar la
   # detección y por tanto no puede exportarse.
@@ -25,7 +41,15 @@ elif [[ "$args" == *" inspect --format "* ]]; then
     if [[ "$previous" == '--format' ]]; then format="$arg"; fi
     previous="$arg"
   done
-  if [[ "$format" == *'.Config.Env'* ]]; then
+  if [[ "$format" == *'.Name}}'* ]]; then
+    # Uso de imágenes: `nginx` y `postgres` están ocupadas, la dangling no.
+    for target in "${@:4}"; do
+      case "$target" in
+        abc123) printf 'sha256:1111111111111111%s/app\n' "$sep" ;;
+        *) printf 'sha256:2222222222222222%s/postgres\n' "$sep" ;;
+      esac
+    done
+  elif [[ "$format" == *'.Config.Env'* ]]; then
     if [[ "$container" == 'postgres' ]]; then
       printf 'POSTGRES_USER=postgres\nPOSTGRES_PASSWORD=secreto\nPOSTGRES_DB=storagia\n'
     else

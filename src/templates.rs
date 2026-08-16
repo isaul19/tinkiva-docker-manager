@@ -146,6 +146,27 @@ pub struct DatabaseRequest<'a> {
     pub memory_mb: u32,
 }
 
+/// `memory_mb == 0` significa **sin límite**: el Compose no lleva `mem_limit` y
+/// el contenedor puede usar toda la RAM del host, igual que un `docker run` sin
+/// `--memory`. Docker no obliga a poner un límite y el panel tampoco debería.
+fn memory_limit_line(memory_mb: u32) -> &'static str {
+    if memory_mb == 0 {
+        ""
+    } else {
+        "    mem_limit: ${TDM_MEMORY_LIMIT:-512m}\n"
+    }
+}
+
+/// Sin límite no se escribe `TDM_MEMORY_LIMIT` en el `.env`: la variable no la
+/// leería nadie y dejarla ahí haría creer que el límite sigue vigente.
+fn memory_env(memory_mb: u32) -> String {
+    if memory_mb == 0 {
+        String::new()
+    } else {
+        format!("TDM_MEMORY_LIMIT={memory_mb}m\n")
+    }
+}
+
 pub struct GeneratedResource {
     pub compose: String,
     pub env: String,
@@ -239,7 +260,7 @@ pub fn database(request: &DatabaseRequest) -> GeneratedResource {
             "      - {service}_data:{data_path}\n",
             "    networks:\n",
             "      - {network}\n",
-            "    mem_limit: ${{TDM_MEMORY_LIMIT:-512m}}\n",
+            "{memory_limit}",
             "{extra}",
             "    healthcheck:\n",
             "      test: {healthcheck}\n",
@@ -267,31 +288,29 @@ pub fn database(request: &DatabaseRequest) -> GeneratedResource {
         network = SHARED_NETWORK,
         extra = extra,
         healthcheck = healthcheck,
+        memory_limit = memory_limit_line(request.memory_mb),
     );
 
-    let memory = request.memory_mb;
-    let env = match engine.id {
+    let mut env = match engine.id {
         "postgres" => format!(
-            "POSTGRES_DB={}\nPOSTGRES_USER={}\nPOSTGRES_PASSWORD={}\nTDM_MEMORY_LIMIT={memory}m\n",
+            "POSTGRES_DB={}\nPOSTGRES_USER={}\nPOSTGRES_PASSWORD={}\n",
             request.database, request.username, request.password
         ),
         "mysql" => format!(
-            "MYSQL_DATABASE={}\nMYSQL_USER={}\nMYSQL_PASSWORD={}\nMYSQL_ROOT_PASSWORD={}\nTDM_MEMORY_LIMIT={memory}m\n",
+            "MYSQL_DATABASE={}\nMYSQL_USER={}\nMYSQL_PASSWORD={}\nMYSQL_ROOT_PASSWORD={}\n",
             request.database, request.username, request.password, request.root_password
         ),
         "mariadb" => format!(
-            "MARIADB_DATABASE={}\nMARIADB_USER={}\nMARIADB_PASSWORD={}\nMARIADB_ROOT_PASSWORD={}\nTDM_MEMORY_LIMIT={memory}m\n",
+            "MARIADB_DATABASE={}\nMARIADB_USER={}\nMARIADB_PASSWORD={}\nMARIADB_ROOT_PASSWORD={}\n",
             request.database, request.username, request.password, request.root_password
         ),
         "mongodb" => format!(
-            "MONGO_INITDB_DATABASE={}\nMONGO_INITDB_ROOT_USERNAME={}\nMONGO_INITDB_ROOT_PASSWORD={}\nTDM_MEMORY_LIMIT={memory}m\n",
+            "MONGO_INITDB_DATABASE={}\nMONGO_INITDB_ROOT_USERNAME={}\nMONGO_INITDB_ROOT_PASSWORD={}\n",
             request.database, request.username, request.password
         ),
-        _ => format!(
-            "REDIS_PASSWORD={}\nTDM_MEMORY_LIMIT={memory}m\n",
-            request.password
-        ),
+        _ => format!("REDIS_PASSWORD={}\n", request.password),
     };
+    env.push_str(&memory_env(request.memory_mb));
 
     let connection_uri = match engine.id {
         "mongodb" => format!(
@@ -309,87 +328,6 @@ pub fn database(request: &DatabaseRequest) -> GeneratedResource {
         compose,
         env,
         image: engine.image.to_owned(),
-        host,
-        connection_uri,
-    }
-}
-
-pub struct ServiceRequest<'a> {
-    pub slug: &'a str,
-    pub image: &'a str,
-    pub container_port: Option<u16>,
-    pub published_port: Option<u16>,
-    pub external_access: bool,
-    pub memory_mb: u32,
-    pub volume_path: Option<&'a str>,
-    /// Pares `CLAVE=valor` ya validados.
-    pub environment: &'a [(String, String)],
-}
-
-/// Servicio suelto a partir de una imagen ya publicada (Docker Hub, GHCR, …).
-pub fn service(request: &ServiceRequest) -> GeneratedResource {
-    let host = request.slug.to_owned();
-    let bind = if request.external_access { "0.0.0.0" } else { "127.0.0.1" };
-    let ports = match (request.published_port, request.container_port) {
-        (Some(published), Some(container)) => {
-            format!("    ports:\n      - \"{bind}:{published}:{container}\"\n")
-        }
-        _ => String::new(),
-    };
-    let volumes = request.volume_path.map_or_else(String::new, |path| {
-        format!("    volumes:\n      - app_data:{path}\n")
-    });
-    let volume_block = if request.volume_path.is_some() {
-        "\nvolumes:\n  app_data:\n"
-    } else {
-        ""
-    };
-
-    let compose = format!(
-        concat!(
-            "# Generado por Tinkiva Docker Manager. Edita con cuidado.\n",
-            "services:\n",
-            "  app:\n",
-            "    image: ${{APP_IMAGE}}\n",
-            "    container_name: {host}\n",
-            "    restart: unless-stopped\n",
-            "    env_file:\n",
-            "      - .env\n",
-            "{ports}",
-            "{volumes}",
-            "    networks:\n",
-            "      - {network}\n",
-            "    mem_limit: ${{TDM_MEMORY_LIMIT:-512m}}\n",
-            "    security_opt:\n",
-            "      - no-new-privileges:true\n",
-            "{volume_block}",
-            "\nnetworks:\n",
-            "  {network}:\n",
-            "    external: true\n"
-        ),
-        host = host,
-        ports = ports,
-        volumes = volumes,
-        network = SHARED_NETWORK,
-        volume_block = volume_block,
-    );
-
-    let mut env = format!(
-        "APP_IMAGE={}\nTDM_MEMORY_LIMIT={}m\n",
-        request.image, request.memory_mb
-    );
-    for (key, value) in request.environment {
-        env.push_str(&format!("{key}={value}\n"));
-    }
-
-    let connection_uri = request
-        .published_port
-        .map_or_else(String::new, |port| format!("http://127.0.0.1:{port}"));
-
-    GeneratedResource {
-        compose,
-        env,
-        image: request.image.to_owned(),
         host,
         connection_uri,
     }
@@ -435,7 +373,7 @@ pub fn repository(request: &RepositoryRequest) -> GeneratedResource {
             "{ports}",
             "    networks:\n",
             "      - {network}\n",
-            "    mem_limit: ${{TDM_MEMORY_LIMIT:-512m}}\n",
+            "{memory_limit}",
             "    security_opt:\n",
             "      - no-new-privileges:true\n",
             "\nnetworks:\n",
@@ -449,11 +387,13 @@ pub fn repository(request: &RepositoryRequest) -> GeneratedResource {
         host = host,
         ports = ports,
         network = SHARED_NETWORK,
+        memory_limit = memory_limit_line(request.memory_mb),
     );
 
     // Cada despliegue fija APP_IMAGE a `tinkiva/<slug>:<commit>`: las versiones
     // anteriores quedan en el Docker local y el rollback no necesita reconstruir.
-    let mut env = format!("APP_IMAGE=tinkiva/{host}:latest\nTDM_MEMORY_LIMIT={memory}m\n", host = host, memory = request.memory_mb);
+    let mut env = format!("APP_IMAGE=tinkiva/{host}:latest\n");
+    env.push_str(&memory_env(request.memory_mb));
     for (key, value) in request.environment {
         env.push_str(&format!("{key}={value}\n"));
     }
@@ -487,6 +427,45 @@ mod tests {
             external_access: false,
             memory_mb: 512,
         })
+    }
+
+    #[test]
+    fn memory_zero_means_no_limit_at_all() {
+        let limited = sample("postgres", None);
+        assert!(limited.compose.contains("mem_limit:"));
+        assert!(limited.env.contains("TDM_MEMORY_LIMIT=512m"));
+
+        // Sin límite el Compose no debe llevar `mem_limit`, ni el .env una
+        // variable que ya nadie leería.
+        let unlimited = database(&DatabaseRequest {
+            engine: engine("postgres").unwrap(),
+            slug: "demo",
+            database: "app",
+            username: "app",
+            password: "s3cret-password",
+            root_password: "root-password",
+            published_port: None,
+            external_access: false,
+            memory_mb: 0,
+        });
+        assert!(!unlimited.compose.contains("mem_limit"));
+        assert!(!unlimited.env.contains("TDM_MEMORY_LIMIT"));
+        assert!(unlimited.compose.contains("no-new-privileges:true"));
+
+        let repository_unlimited = repository(&RepositoryRequest {
+            slug: "demo",
+            repository: "isaul19/demo",
+            branch: "main",
+            dockerfile: "Dockerfile",
+            build_context: ".",
+            container_port: None,
+            published_port: None,
+            external_access: false,
+            memory_mb: 0,
+            environment: &[],
+        });
+        assert!(!repository_unlimited.compose.contains("mem_limit"));
+        assert!(!repository_unlimited.env.contains("TDM_MEMORY_LIMIT"));
     }
 
     #[test]
@@ -564,39 +543,6 @@ mod tests {
         let catalog = engines_json();
         let parsed = crate::json::Json::parse(&catalog).unwrap();
         assert_eq!(parsed.as_array().map(<[_]>::len), Some(ENGINES.len()));
-    }
-
-    #[test]
-    fn image_service_uses_env_indirection_for_rollbacks() {
-        let generated = service(&ServiceRequest {
-            slug: "cache-proxy",
-            image: "nginx:1.27-alpine",
-            container_port: Some(80),
-            published_port: Some(8080),
-            external_access: false,
-            memory_mb: 256,
-            volume_path: None,
-            environment: &[("LOG_LEVEL".to_owned(), "info".to_owned())],
-        });
-        assert!(generated.compose.contains("image: ${APP_IMAGE}"));
-        assert!(generated.compose.contains("\"127.0.0.1:8080:80\""));
-        assert!(generated.env.contains("APP_IMAGE=nginx:1.27-alpine"));
-        assert!(generated.env.contains("LOG_LEVEL=info"));
-    }
-
-    #[test]
-    fn image_service_can_be_exposed_on_all_interfaces() {
-        let generated = service(&ServiceRequest {
-            slug: "public-api",
-            image: "node:24-alpine",
-            container_port: Some(3000),
-            published_port: Some(3000),
-            external_access: true,
-            memory_mb: 256,
-            volume_path: None,
-            environment: &[],
-        });
-        assert!(generated.compose.contains("\"0.0.0.0:3000:3000\""));
     }
 
     #[test]

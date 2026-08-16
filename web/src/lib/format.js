@@ -52,6 +52,31 @@ export function formatIsoRelative(iso) {
   return Number.isNaN(parsed) ? '—' : formatRelative(Math.floor(parsed / 1000));
 }
 
+const AGE_UNITS = {
+  second: ['segundo', 'segundos'],
+  minute: ['minuto', 'minutos'],
+  hour: ['hora', 'horas'],
+  day: ['día', 'días'],
+  week: ['semana', 'semanas'],
+  month: ['mes', 'meses'],
+  year: ['año', 'años'],
+};
+
+/** «3 weeks ago» de Docker a «hace 3 semanas». */
+export function formatDockerAge(value) {
+  const text = String(value || '').trim();
+  if (!text) return '—';
+  if (/^about a minute ago$/i.test(text)) return 'hace un minuto';
+  if (/^about an hour ago$/i.test(text)) return 'hace una hora';
+  if (/^less than a second ago$/i.test(text)) return 'hace instantes';
+
+  const match = text.match(/^(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i);
+  if (!match) return text;
+  const [, count, unit] = match;
+  const [singular, plural] = AGE_UNITS[unit.toLowerCase()];
+  return `hace ${count} ${count === '1' ? singular : plural}`;
+}
+
 export function formatDuration(milliseconds) {
   if (!Number.isFinite(milliseconds)) return '—';
   if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;

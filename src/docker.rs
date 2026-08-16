@@ -60,6 +60,65 @@ pub struct ContainerInfo {
     pub pids: Option<String>,
 }
 
+/// Imagen local del host. `containers` lista los contenedores que la usan; si
+/// está vacío, la imagen puede borrarse sin romper nada.
+#[derive(Debug, Clone)]
+pub struct ImageInfo {
+    pub id: String,
+    /// Lo que hay que pasarle a `docker rmi`: `repo:tag`, o el id si no tiene
+    /// etiqueta.
+    pub reference: String,
+    pub repository: String,
+    pub tag: String,
+    /// Cifra redondeada de `docker images`, por si el inspect no responde.
+    pub size: String,
+    pub size_bytes: u64,
+    /// Antigüedad tal y como la da Docker («3 weeks ago»); se traduce en la
+    /// interfaz, que es donde vive el idioma del panel.
+    pub created_since: String,
+    pub containers: Vec<String>,
+}
+
+impl ImageInfo {
+    pub fn to_json(&self) -> String {
+        let containers = self
+            .containers
+            .iter()
+            .map(|name| json_string(name))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            concat!(
+                "{{",
+                "\"id\":{},",
+                "\"reference\":{},",
+                "\"repository\":{},",
+                "\"tag\":{},",
+                "\"size\":{},",
+                "\"size_bytes\":{},",
+                "\"created_since\":{},",
+                "\"in_use\":{},",
+                "\"containers\":[{}]",
+                "}}"
+            ),
+            json_string(&self.id),
+            json_string(&self.reference),
+            json_string(&self.repository),
+            json_string(&self.tag),
+            json_string(&self.size),
+            self.size_bytes,
+            json_string(&self.created_since),
+            !self.containers.is_empty(),
+            containers
+        )
+    }
+}
+
+/// `sha256:abc…` → `abc123456789`, como muestra `docker images`.
+fn short_image_id(id: &str) -> String {
+    id.trim_start_matches("sha256:").chars().take(12).collect()
+}
+
 /// Información puntual para decidir la experiencia de consola. Se calcula al
 /// abrirla; no se guarda ni mantiene procesos en segundo plano.
 #[derive(Debug, Clone)]
@@ -208,6 +267,152 @@ impl DockerClient {
 
         containers.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(containers)
+    }
+
+    /// Imágenes locales con su peso y qué contenedores las están usando. El uso
+    /// se resuelve comparando el id completo que devuelve `inspect`, no la
+    /// referencia con la que se arrancó el contenedor: así una imagen sigue
+    /// contando como en uso aunque le hayan movido la etiqueta.
+    pub fn images(&self) -> Result<Vec<ImageInfo>, String> {
+        let separator = FIELD_SEPARATOR;
+        let format = format!(
+            "{{{{.ID}}}}{separator}{{{{.Repository}}}}{separator}{{{{.Tag}}}}{separator}{{{{.Size}}}}{separator}{{{{.CreatedSince}}}}"
+        );
+        let result = self.run(
+            ["images", "--no-trunc", "--format", &format],
+            None,
+            Duration::from_secs(15),
+        )?;
+        if !result.success {
+            return Err(result.summary());
+        }
+
+        let users = self.image_users().unwrap_or_default();
+        let sizes = self.image_sizes(&result.stdout, separator).unwrap_or_default();
+        let mut images = Vec::new();
+        for line in result.stdout.lines().filter(|line| !line.trim().is_empty()) {
+            let fields: Vec<&str> = line.split(separator).collect();
+            if fields.len() != 5 {
+                continue;
+            }
+            let id = fields[0].to_owned();
+            let repository = fields[1].to_owned();
+            let tag = fields[2].to_owned();
+            // Una imagen sin etiqueta solo puede borrarse por id; una etiquetada
+            // se borra por `repo:tag` para no arrastrar sus otras etiquetas.
+            let reference = if repository == "<none>" || tag == "<none>" {
+                short_image_id(&id)
+            } else {
+                format!("{repository}:{tag}")
+            };
+            let containers = users
+                .get(&id)
+                .cloned()
+                .unwrap_or_default();
+            images.push(ImageInfo {
+                size: fields[3].to_owned(),
+                size_bytes: sizes.get(&id).copied().unwrap_or(0),
+                created_since: fields[4].to_owned(),
+                id: short_image_id(&id),
+                reference,
+                repository,
+                tag,
+                containers,
+            });
+        }
+        // Las más pesadas primero: la lista existe sobre todo para recuperar disco.
+        images.sort_by(|left, right| {
+            right
+                .size_bytes
+                .cmp(&left.size_bytes)
+                .then_with(|| left.reference.cmp(&right.reference))
+        });
+        Ok(images)
+    }
+
+    /// Tamaño exacto en bytes de cada imagen. `docker images` solo da la cifra
+    /// redondeada («142MB»), que no sirve ni para sumar ni para ordenar.
+    fn image_sizes(&self, listing: &str, separator: char) -> Result<HashMap<String, u64>, String> {
+        let mut ids: Vec<&str> = listing
+            .lines()
+            .filter_map(|line| line.split(separator).next())
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let format = format!("{{{{.Id}}}}{separator}{{{{.Size}}}}");
+        let mut arguments = vec!["image", "inspect", "--format", &format];
+        arguments.extend(ids);
+        let inspect = self.run(arguments, None, Duration::from_secs(20))?;
+        if !inspect.success {
+            return Err(inspect.summary());
+        }
+
+        let mut sizes = HashMap::new();
+        for line in inspect.stdout.lines().filter(|line| !line.trim().is_empty()) {
+            let mut parts = line.split(separator);
+            let (Some(id), Some(size)) = (parts.next(), parts.next()) else {
+                continue;
+            };
+            if let Ok(bytes) = size.trim().parse::<u64>() {
+                sizes.insert(id.trim().to_owned(), bytes);
+            }
+        }
+        Ok(sizes)
+    }
+
+    /// Mapa `id completo de imagen → contenedores que la usan`, incluidos los
+    /// detenidos: borrar la imagen de un contenedor parado también lo rompería.
+    fn image_users(&self) -> Result<HashMap<String, Vec<String>>, String> {
+        let list = self.run(["ps", "-aq", "--no-trunc"], None, Duration::from_secs(15))?;
+        if !list.success {
+            return Err(list.summary());
+        }
+        let ids: Vec<&str> = list
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .collect();
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let separator = FIELD_SEPARATOR;
+        let format = format!("{{{{.Image}}}}{separator}{{{{.Name}}}}");
+        let mut arguments = vec!["inspect", "--format", &format];
+        arguments.extend(ids);
+        let inspect = self.run(arguments, None, Duration::from_secs(20))?;
+        if !inspect.success {
+            return Err(inspect.summary());
+        }
+
+        let mut users: HashMap<String, Vec<String>> = HashMap::new();
+        for line in inspect.stdout.lines().filter(|line| !line.trim().is_empty()) {
+            let mut parts = line.split(separator);
+            let (Some(image), Some(name)) = (parts.next(), parts.next()) else {
+                continue;
+            };
+            users
+                .entry(image.trim().to_owned())
+                .or_default()
+                .push(name.trim().trim_start_matches('/').to_owned());
+        }
+        Ok(users)
+    }
+
+    /// Borra una imagen local. Nunca usa `--force`: si Docker considera que algo
+    /// depende de ella, preferimos fallar y contarlo.
+    pub fn remove_image(&self, reference: &str) -> Result<CommandResult, String> {
+        if !valid_container_ref(reference) {
+            return Err("referencia de imagen inválida".to_owned());
+        }
+        self.run(["rmi", reference], None, Duration::from_secs(60))
     }
 
     /// Estado agregado de los servicios que pertenecen a un proyecto Compose.

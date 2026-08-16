@@ -4,7 +4,7 @@ import { useApp } from '../lib/context.js';
 import { toSlug } from '../lib/format.js';
 import { BrandIcon } from '../ui/BrandIcon.jsx';
 import { Button } from '../ui/Primitives.jsx';
-import { Field, FormGrid, Input } from '../ui/Form.jsx';
+import { Field, FormGrid, Input, MemoryUnlimited } from '../ui/Form.jsx';
 import { useToast } from '../ui/Toast.jsx';
 
 export function DatabaseForm({ onCreated }) {
@@ -23,6 +23,7 @@ export function DatabaseForm({ onCreated }) {
     published_port: '',
     external_access: false,
     memory_mb: '',
+    memory_unlimited: false,
   });
   const [busy, setBusy] = useState(false);
 
@@ -54,6 +55,7 @@ export function DatabaseForm({ onCreated }) {
         published_port: form.published_port,
         external_access: form.external_access,
         memory_mb: form.memory_mb || String(engine.default_memory_mb),
+        memory_unlimited: form.memory_unlimited,
       });
       onCreated(result);
     } catch (error) {
@@ -120,7 +122,14 @@ export function DatabaseForm({ onCreated }) {
           <Input type="password" value={form.password} onInput={update('password')} minLength={12} />
         </Field>
 
-        <Field label="RAM máxima (MB)" hint={`Entre 64 y 16384 MB. Vacío = ${engine.default_memory_mb} MB.`}>
+        <Field
+          label="RAM máxima (MB)"
+          hint={
+            form.memory_unlimited
+              ? 'Sin límite: este campo no se aplica.'
+              : `Entre 64 y 16384 MB. Vacío = ${engine.default_memory_mb} MB.`
+          }
+        >
           <Input
             type="number"
             min="64"
@@ -128,8 +137,14 @@ export function DatabaseForm({ onCreated }) {
             value={form.memory_mb}
             onInput={update('memory_mb')}
             placeholder={String(engine.default_memory_mb)}
+            disabled={form.memory_unlimited}
           />
         </Field>
+        <MemoryUnlimited
+          checked={form.memory_unlimited}
+          onChange={(checked) => setForm((current) => ({ ...current, memory_unlimited: checked }))}
+          engine={engine.label}
+        />
         <Field
           label="Puerto local (opcional)"
           hint={`Interno: ${engine.port}. Se limita al VPS salvo que permitas acceso externo.`}

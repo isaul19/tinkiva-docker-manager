@@ -16,7 +16,6 @@ mod metrics;
 mod model;
 mod net;
 mod proc;
-mod registry;
 mod setup;
 mod store;
 mod templates;

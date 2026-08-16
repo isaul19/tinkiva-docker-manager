@@ -5,7 +5,7 @@ import { useAsync } from '../lib/hooks.js';
 import { formatIsoRelative, toSlug } from '../lib/format.js';
 import { BrandIcon } from '../ui/BrandIcon.jsx';
 import { AsyncBlock, Button, EmptyState, Spinner } from '../ui/Primitives.jsx';
-import { Field, FormGrid, Input, Select, TextArea } from '../ui/Form.jsx';
+import { Field, FormGrid, Input, MemoryUnlimited, Select, TextArea } from '../ui/Form.jsx';
 import { useToast } from '../ui/Toast.jsx';
 
 export function RepositoryForm({ onCreated }) {
@@ -26,6 +26,7 @@ export function RepositoryForm({ onCreated }) {
     container_port: '',
     published_port: '',
     memory_mb: '512',
+    memory_unlimited: false,
     environment: '',
     external_access: false,
     auto_deploy: true,
@@ -220,9 +221,16 @@ export function RepositoryForm({ onCreated }) {
             <Input value={form.branch} onInput={update('branch')} required />
           )}
         </Field>
-        <Field label="RAM máxima (MB)" hint="Entre 64 y 16384 MB para el contenedor.">
-          <Input type="number" min="64" max="16384" value={form.memory_mb} onInput={update('memory_mb')} />
+        <Field
+          label="RAM máxima (MB)"
+          hint={form.memory_unlimited ? 'Sin límite: este campo no se aplica.' : 'Entre 64 y 16384 MB para el contenedor.'}
+        >
+          <Input type="number" min="64" max="16384" value={form.memory_mb} onInput={update('memory_mb')} disabled={form.memory_unlimited} />
         </Field>
+        <MemoryUnlimited
+          checked={form.memory_unlimited}
+          onChange={(checked) => setForm((current) => ({ ...current, memory_unlimited: checked }))}
+        />
 
         <Field label="Tipo de aplicación" hint="Auto detecta Dockerfile, Node, Python o un sitio estático.">
           <Select

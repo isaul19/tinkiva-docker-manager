@@ -1185,6 +1185,19 @@ code {
   font-weight: 620;
 }
 
+.table-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.7rem;
+}
+
+.table-summary p {
+  margin: 0;
+}
+
 /* ── Exportación de bases de datos ──────────────────────────────────────── */
 
 .export-section {

@@ -14,7 +14,7 @@ use crate::util::{
     valid_db_identifier, valid_display_name, valid_env_key, valid_image_ref, valid_schema_name,
     valid_slug,
 };
-use crate::{buildpack, net, registry};
+use crate::{buildpack, net};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -316,6 +316,8 @@ impl App {
             ("POST", ["api", "containers", container, action]) => {
                 self.container_action(container, action)
             }
+            ("GET", ["api", "images"]) => self.list_images(),
+            ("DELETE", ["api", "images"]) => self.delete_image(request),
             ("GET", ["api", "projects"]) => self.list_projects(),
             ("POST", ["api", "projects"]) => self.create_project(request),
             ("DELETE", ["api", "projects", slug]) => self.delete_project(slug, request),
@@ -333,9 +335,6 @@ impl App {
             ("GET", ["api", "history"]) => self.history(request),
             ("GET", ["api", "history", "page"]) => self.history_page(request),
 
-            ("GET", ["api", "registry", "search"]) => self.registry_search(request),
-            ("GET", ["api", "registry", "tags"]) => self.registry_tags(request),
-
             ("GET", ["api", "github"]) => self.github_status(request),
             ("DELETE", ["api", "github"]) => self.github_disconnect(),
             ("POST", ["api", "github", "manifest"]) => self.github_manifest(request),
@@ -346,7 +345,6 @@ impl App {
             ("GET", ["api", "github", "branches"]) => self.github_branches(request),
 
             ("POST", ["api", "resources", "database"]) => self.create_database(request, None),
-            ("POST", ["api", "resources", "image"]) => self.create_image_service(request),
             ("POST", ["api", "resources", "repository"]) => self.create_repository_service(request),
             ("POST", ["api", "resources", "compose"]) => self.create_compose_text_resource(request),
             // Ruta histórica: equivale a crear una base de datos PostgreSQL.
@@ -427,9 +425,8 @@ impl App {
         Response::json(
             200,
             format!(
-                "{{\"engines\":{},\"popular_images\":{},\"capabilities\":{},\"allowed_root\":{}}}",
+                "{{\"engines\":{},\"capabilities\":{},\"allowed_root\":{}}}",
                 templates::engines_json(),
-                registry::popular_json(),
                 self.capabilities.to_json(),
                 json_string(&self.config.allowed_root.to_string_lossy()),
             ),
@@ -466,6 +463,63 @@ impl App {
                 ),
             ),
             Err(error) => json_error(503, &error),
+        }
+    }
+
+    fn list_images(&self) -> Response {
+        match self.docker.images() {
+            Ok(images) => Response::json(
+                200,
+                format!(
+                    "[{}]",
+                    images
+                        .iter()
+                        .map(|image| image.to_json())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ),
+            ),
+            Err(error) => json_error(503, &error),
+        }
+    }
+
+    /// Borra una imagen local, pero solo si ningún contenedor la usa. La
+    /// comprobación se rehace aquí con datos frescos: entre que el panel pintó
+    /// la lista y el usuario pulsó borrar puede haber arrancado algo.
+    fn delete_image(&self, request: &Request) -> Response {
+        let Some(reference) = request.query.get("reference").map(String::as_str) else {
+            return json_error(400, "indica la imagen a borrar");
+        };
+        let images = match self.docker.images() {
+            Ok(images) => images,
+            Err(error) => return json_error(503, &error),
+        };
+        let Some(image) = images
+            .iter()
+            .find(|image| image.reference == reference || image.id == reference)
+        else {
+            return json_error(404, "la imagen no existe en este host");
+        };
+        if !image.containers.is_empty() {
+            return json_error(
+                409,
+                &format!(
+                    "la imagen está en uso por {}. Elimina primero esos contenedores.",
+                    image.containers.join(", ")
+                ),
+            );
+        }
+
+        match self.docker.remove_image(&image.reference) {
+            Ok(result) if result.success => Response::json(
+                200,
+                format!(
+                    "{{\"ok\":true,\"message\":{}}}",
+                    json_string(&format!("Imagen {} eliminada.", image.reference))
+                ),
+            ),
+            Ok(result) => json_error(502, &result.summary()),
+            Err(error) => json_error(502, &error),
         }
     }
 
@@ -1503,30 +1557,6 @@ impl App {
         }
     }
 
-    // ── Docker Hub ─────────────────────────────────────────────────────────
-
-    fn registry_search(&self, request: &Request) -> Response {
-        if !self.capabilities.curl {
-            return json_error(503, "curl no está instalado; no se puede consultar Docker Hub");
-        }
-        let query = request.query.get("q").map_or("", String::as_str);
-        match registry::search(query) {
-            Ok(body) => Response::json(200, body),
-            Err(error) => json_error(502, &error),
-        }
-    }
-
-    fn registry_tags(&self, request: &Request) -> Response {
-        if !self.capabilities.curl {
-            return json_error(503, "curl no está instalado; no se puede consultar Docker Hub");
-        }
-        let image = request.query.get("image").map_or("", String::as_str);
-        match registry::tags(image) {
-            Ok(body) => Response::json(200, body),
-            Err(error) => json_error(502, &error),
-        }
-    }
-
     // ── GitHub App ─────────────────────────────────────────────────────────
 
     fn github_status(&self, request: &Request) -> Response {
@@ -1774,10 +1804,7 @@ impl App {
             Err(error) => return json_error(422, &error),
         };
         let external_access = field(&fields, "external_access") == "true";
-        let memory_mb = optional_field(&fields, "memory_mb")
-            .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(engine.default_memory_mb)
-            .clamp(64, 16_384);
+        let memory_mb = parse_memory_mb(&fields, engine.default_memory_mb);
 
         let generated = templates::database(&templates::DatabaseRequest {
             engine,
@@ -1812,96 +1839,6 @@ impl App {
                 generated,
             },
             Some(&password),
-            published_port,
-            external_access,
-        )
-    }
-
-    fn create_image_service(&self, request: &Request) -> Response {
-        if let Err(error) = self.require_docker_compose() {
-            return json_error(503, &error);
-        }
-        let fields = match request.form() {
-            Ok(fields) => fields,
-            Err(error) => return json_error(400, &error),
-        };
-        let slug = field(&fields, "slug");
-        let name = field(&fields, "name");
-        let image = field(&fields, "image");
-
-        if !valid_slug(slug) {
-            return json_error(422, "slug inválido");
-        }
-        if !valid_display_name(name) {
-            return json_error(422, "nombre inválido");
-        }
-        if !valid_image_ref(image) {
-            return json_error(422, "referencia de imagen inválida");
-        }
-
-        let container_port = match parse_port(&fields, "container_port") {
-            Ok(port) => port,
-            Err(error) => return json_error(422, &error),
-        };
-        let mut published_port = match parse_port(&fields, "published_port") {
-            Ok(port) => port,
-            Err(error) => return json_error(422, &error),
-        };
-        // Puerto local vacío → se publica en el mismo puerto que escucha el
-        // contenedor; sin ninguno el servicio queda solo en la red interna.
-        if published_port.is_none() && container_port.is_some() {
-            published_port = container_port;
-        }
-        if published_port.is_some() && container_port.is_none() {
-            return json_error(422, "indica también el puerto interno del contenedor");
-        }
-        let external_access = field(&fields, "external_access") == "true";
-        let memory_mb = optional_field(&fields, "memory_mb")
-            .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(512)
-            .clamp(64, 16_384);
-        let volume_path = optional_field(&fields, "volume_path");
-        if volume_path.is_some_and(|path| !valid_absolute_path(path)) {
-            return json_error(422, "ruta de volumen inválida");
-        }
-        let environment = match parse_environment(field(&fields, "environment")) {
-            Ok(environment) => environment,
-            Err(error) => return json_error(422, &error),
-        };
-
-        let generated = templates::service(&templates::ServiceRequest {
-            slug,
-            image,
-            container_port,
-            published_port,
-            external_access,
-            memory_mb,
-            volume_path,
-            environment: &environment,
-        });
-
-        let directory = match self.prepare_directory(slug) {
-            Ok(directory) => directory,
-            Err(error) => return json_error(error.status, &error.message),
-        };
-
-        self.finish_resource(
-            &directory,
-            NewResource {
-                slug: slug.to_owned(),
-                name: name.trim().to_owned(),
-                kind: KIND_IMAGE,
-                engine: optional_field(&fields, "icon").map(str::to_owned),
-                repository: None,
-                installation_id: None,
-                branch: None,
-                // Con la imagen en `.env` el rollback funciona igual que en Compose.
-                image_env: Some("APP_IMAGE".to_owned()),
-                current_image: Some(image.to_owned()),
-                auto_deploy: field(&fields, "auto_deploy") != "false",
-                generated,
-            },
-            None,
             published_port,
             external_access,
         )
@@ -1957,10 +1894,7 @@ impl App {
             Ok(port) => port,
             Err(error) => return json_error(422, &error),
         };
-        let memory_mb = optional_field(&fields, "memory_mb")
-            .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(512)
-            .clamp(64, 16_384);
+        let memory_mb = parse_memory_mb(&fields, 512);
         let environment = match parse_environment(field(&fields, "environment")) {
             Ok(environment) => environment,
             Err(error) => return json_error(422, &error),
@@ -2352,6 +2286,18 @@ fn optional_field<'a>(fields: &'a HashMap<String, String>, name: &str) -> Option
     (!value.is_empty()).then_some(value)
 }
 
+/// Límite de RAM del recurso en MB. `memory_unlimited=true` devuelve 0, que las
+/// plantillas traducen a un Compose sin `mem_limit`.
+fn parse_memory_mb(fields: &HashMap<String, String>, default_mb: u32) -> u32 {
+    if field(fields, "memory_unlimited") == "true" {
+        return 0;
+    }
+    optional_field(fields, "memory_mb")
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(default_mb)
+        .clamp(64, 16_384)
+}
+
 fn validate_compose_text(compose: &str) -> Result<(), String> {
     if compose.trim().is_empty() {
         return Err("pega el contenido de docker-compose.yml".to_owned());
@@ -2551,16 +2497,6 @@ fn valid_relative_path(value: &str) -> bool {
         })
 }
 
-/// Punto de montaje dentro del contenedor.
-fn valid_absolute_path(value: &str) -> bool {
-    value.starts_with('/')
-        && value.len() <= 256
-        && !value.contains("..")
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/')
-        })
-}
-
 fn json_optional_secret(secret: Option<&str>) -> String {
     secret.map_or_else(|| "null".to_owned(), json_string)
 }
@@ -2622,15 +2558,6 @@ mod tests {
         assert!(!valid_relative_path("../Dockerfile"));
         assert!(!valid_relative_path("a/../../b"));
         assert!(!valid_relative_path(""));
-    }
-
-    #[test]
-    fn volume_paths_must_be_absolute_and_plain() {
-        assert!(valid_absolute_path("/data"));
-        assert!(valid_absolute_path("/var/lib/app"));
-        assert!(!valid_absolute_path("data"));
-        assert!(!valid_absolute_path("/data/../etc"));
-        assert!(!valid_absolute_path("/data;rm -rf /"));
     }
 
     #[test]

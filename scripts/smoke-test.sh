@@ -117,6 +117,20 @@ grep -q -- '-- tinkiva: storagia' "$TMP/export.sql"
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST \
   "$BASE/api/containers/postgres/export" -d 'mode=all&schemas=--host%3Devil')" == '400' ]]
 
+# Imágenes: se listan con su peso y solo se pueden borrar las que nadie usa.
+curl -fsS "${AUTH[@]}" "$BASE/api/images" | jq -e 'length == 3' >/dev/null
+curl -fsS "${AUTH[@]}" "$BASE/api/images" \
+  | jq -e '[.[] | select(.reference == "nginx:1.27")][0] | .in_use == true and (.containers | index("app")) != null' >/dev/null
+curl -fsS "${AUTH[@]}" "$BASE/api/images" \
+  | jq -e '[.[] | select(.in_use == false)] | length == 1' >/dev/null
+# Las más pesadas primero y con el tamaño exacto en bytes, no la cifra redondeada.
+curl -fsS "${AUTH[@]}" "$BASE/api/images" \
+  | jq -e '.[0].reference == "postgres:17-alpine" and .[0].size_bytes == 271000000' >/dev/null
+curl -fsS "${AUTH[@]}" "$BASE/api/images" | jq -e '.[0].created_since == "2 days ago"' >/dev/null
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X DELETE "$BASE/api/images?reference=nginx:1.27")" == '409' ]]
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X DELETE "$BASE/api/images?reference=noexiste:1")" == '404' ]]
+curl -fsS "${AUTH[@]}" -X DELETE "$BASE/api/images?reference=333333333333" | jq -e '.ok == true' >/dev/null
+
 # La ruta histórica de PostgreSQL debe seguir funcionando igual que antes.
 curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/templates/postgres" \
   --data-urlencode 'slug=demo-db' \
@@ -127,7 +141,7 @@ curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/templates/postgres" \
 
 # El catálogo alimenta el diálogo «Añadir recurso» de la interfaz.
 curl -fsS "${AUTH[@]}" "$BASE/api/catalog" \
-  | jq -e '(.engines | length) == 5 and (.popular_images | length) > 0 and (.capabilities | has("curl"))' >/dev/null
+  | jq -e '(.engines | length) == 5 and (.capabilities | has("curl")) and (has("popular_images") | not)' >/dev/null
 
 # Cada motor debe generar su Compose endurecido y su cadena de conexión.
 for ENGINE in mysql mariadb mongodb redis; do
@@ -146,38 +160,20 @@ for ENGINE in mysql mariadb mongodb redis; do
   ! grep -q 'ports:' "$TMP/apps/demo-$ENGINE/compose.yaml"
 done
 
-# Un servicio desde imagen queda con APP_IMAGE en .env, así el rollback funciona.
-curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/image" \
-  --data-urlencode 'slug=demo-proxy' \
-  --data-urlencode 'name=Demo proxy' \
-  --data-urlencode 'image=nginx:1.27-alpine' \
-  --data-urlencode 'container_port=80' \
-  --data-urlencode 'published_port=8099' \
-  --data-urlencode 'environment=LOG_LEVEL=info' \
-  | jq -e '.project.kind == "image" and .project.image_env == "APP_IMAGE"' >/dev/null
-grep -qx 'APP_IMAGE=nginx:1.27-alpine' "$TMP/apps/demo-proxy/.env"
-grep -qx 'LOG_LEVEL=info' "$TMP/apps/demo-proxy/.env"
-grep -q '"127.0.0.1:8099:80"' "$TMP/apps/demo-proxy/compose.yaml"
-
-# Sin puerto local se publica en el mismo puerto que el contenedor.
-curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/image" \
-  --data-urlencode 'slug=demo-same-port' \
-  --data-urlencode 'name=Same port' \
-  --data-urlencode 'image=nginx:1.27-alpine' \
-  --data-urlencode 'container_port=3000' \
-  | jq -e '.deployment.status == "success"' >/dev/null
-grep -q '"127.0.0.1:3000:3000"' "$TMP/apps/demo-same-port/compose.yaml"
-curl -fsS "${AUTH[@]}" -X DELETE "$BASE/api/projects/demo-same-port?remove=all" >/dev/null
-
-# Variables reservadas y rutas de escape deben rechazarse.
-[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/image" \
-  --data-urlencode 'slug=demo-bad' --data-urlencode 'name=Malo' \
-  --data-urlencode 'image=nginx:1.27-alpine' \
-  --data-urlencode 'environment=APP_IMAGE=otra:1')" == '422' ]]
-[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/image" \
-  --data-urlencode 'slug=demo-bad' --data-urlencode 'name=Malo' \
-  --data-urlencode 'image=nginx:1.27-alpine' \
-  --data-urlencode 'volume_path=/data/../etc')" == '422' ]]
+# «Sin límite de RAM» debe dejar el Compose sin mem_limit y el .env sin la
+# variable: Docker tampoco obliga a poner un techo.
+curl -fsS "${AUTH[@]}" "${FORM[@]}" -X POST "$BASE/api/resources/database" \
+  --data-urlencode 'engine=postgres' \
+  --data-urlencode 'slug=demo-sin-limite' \
+  --data-urlencode 'name=Demo sin limite' \
+  --data-urlencode 'database=demo' \
+  --data-urlencode 'username=demo' \
+  --data-urlencode 'memory_mb=256' \
+  --data-urlencode 'memory_unlimited=true' | jq -e '.project.slug == "demo-sin-limite"' >/dev/null
+! grep -q 'mem_limit' "$TMP/apps/demo-sin-limite/compose.yaml"
+! grep -q 'TDM_MEMORY_LIMIT' "$TMP/apps/demo-sin-limite/.env"
+grep -q 'no-new-privileges:true' "$TMP/apps/demo-sin-limite/compose.yaml"
+curl -fsS "${AUTH[@]}" -X DELETE "$BASE/api/projects/demo-sin-limite?remove=all" >/dev/null
 
 # Sin GitHub App conectada el estado debe decirlo sin romperse.
 curl -fsS "${AUTH[@]}" "$BASE/api/github" | jq -e '.connected == false' >/dev/null

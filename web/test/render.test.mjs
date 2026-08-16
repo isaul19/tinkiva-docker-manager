@@ -64,9 +64,6 @@ const API = {
         description: 'Caché',
       },
     ],
-    popular_images: [
-      { name: 'nginx', icon: 'nginx', description: 'Servidor web', official: true },
-    ],
     capabilities: { curl: true, openssl: true, git: true },
     allowed_root: '/opt/tinkiva/apps',
   },
@@ -199,6 +196,30 @@ const API = {
     webhook_url: null,
   },
   '/api/github/installations': [],
+  '/api/images': [
+    {
+      id: '111111111111',
+      reference: 'pgvector/pgvector:pg17-trixie',
+      repository: 'pgvector/pgvector',
+      tag: 'pg17-trixie',
+      size: '431MB',
+      size_bytes: 431_000_000,
+      created_since: '3 weeks ago',
+      in_use: true,
+      containers: ['storagia-postgres'],
+    },
+    {
+      id: '222222222222',
+      reference: 'nginx:1.27',
+      repository: 'nginx',
+      tag: '1.27',
+      size: '142MB',
+      size_bytes: 142_000_000,
+      created_since: '2 days ago',
+      in_use: false,
+      containers: [],
+    },
+  ],
   '/api/containers/storagia-postgres/export': {
     database: 'postgres',
     database_label: 'PostgreSQL',
@@ -311,7 +332,34 @@ async function mount({ token = null, hash = '#/dashboard' } = {}) {
     }
   };
 
-  return { html: root().innerHTML, text: text(), currentText: text, calls, click, find, document };
+  /**
+   * Marca o desmarca un checkbox y dispara su `change`. En un navegador basta
+   * con pulsar la etiqueta; linkedom no propaga el click al input asociado.
+   */
+  const toggle = async (selector, needle) => {
+    const container = find(selector, needle);
+    assert.ok(container, `no se encontró «${needle}» (${selector})`);
+    const input = container.querySelector('input[type=checkbox]') || container;
+    input.checked = !input.checked;
+    install();
+    try {
+      input.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await flush();
+    } finally {
+      restore();
+    }
+  };
+
+  return {
+    html: root().innerHTML,
+    text: text(),
+    currentText: text,
+    calls,
+    click,
+    toggle,
+    find,
+    document,
+  };
 }
 
 const tests = [];
@@ -403,18 +451,6 @@ test('la vista de procesos ordena por consumo', async () => {
   assert.match(text, /11\.4 MB/);
 });
 
-test('«Añadir recurso» ofrece los orígenes Compose', async () => {
-  const app = await mount({ token: 'x'.repeat(40) });
-  await app.click('button', 'Añadir recurso');
-
-  const text = app.currentText();
-  assert.match(text, /Base de datos/);
-  assert.match(text, /Imagen de Docker Hub/);
-  assert.match(text, /Repositorio de GitHub/);
-  assert.doesNotMatch(text, /Compose existente/);
-  assert.match(text, /Crear Docker Compose/);
-});
-
 test('el paso de base de datos pinta los motores del catálogo', async () => {
   const app = await mount({ token: 'x'.repeat(40) });
   await app.click('button', 'Añadir recurso');
@@ -431,19 +467,16 @@ test('el paso de base de datos pinta los motores del catálogo', async () => {
   assert.match(text, /Crear y desplegar/);
 });
 
-test('el paso de imagen arranca en el buscador de Docker Hub', async () => {
+test('«Añadir recurso» ya no ofrece el origen de Docker Hub', async () => {
   const app = await mount({ token: 'x'.repeat(40) });
   await app.click('button', 'Añadir recurso');
-  await app.click('.type-card', 'Imagen de Docker Hub');
-
-  const search = app.document.querySelector('input[type="search"]');
-  assert.ok(search, 'debe haber un campo de búsqueda');
-  assert.match(search.getAttribute('placeholder'), /Docker Hub/);
 
   const text = app.currentText();
-  assert.match(text, /Sugerencias populares/);
-  assert.match(text, /nginx/);
-  assert.match(text, /oficial/);
+  assert.ok(!text.includes('Imagen de Docker Hub'), 'el origen de imagen se retiró');
+  assert.match(text, /Base de datos/);
+  assert.match(text, /Repositorio de GitHub/);
+  assert.doesNotMatch(text, /Compose existente/);
+  assert.match(text, /Crear Docker Compose/, 'Compose cubre el caso de una imagen suelta');
 });
 
 test('el origen de repositorio se bloquea si GitHub no está conectado', async () => {
@@ -484,6 +517,43 @@ test('un contenedor que no es base de datos no ofrece exportar', async () => {
   const menu = app.find('.action-menu-popover', 'Ver logs');
   assert.ok(menu, 'el menú debe estar abierto');
   assert.ok(!menu.textContent.includes('Exportar SQL'));
+});
+
+test('la vista de imágenes marca cuáles están en uso y bloquea su borrado', async () => {
+  const app = await mount({ token: 'x'.repeat(40), hash: '#/images' });
+  const text = app.currentText();
+  assert.match(text, /pgvector\/pgvector/);
+  assert.match(text, /411 MB/, 'tamaño calculado desde los bytes exactos');
+  assert.match(text, /hace 3 semanas/, 'la antigüedad de Docker se traduce');
+  assert.match(text, /En uso/);
+  assert.match(text, /storagia-postgres/, 'debe decir qué contenedor la usa');
+  assert.match(text, /Sin usar/);
+  assert.match(text, /2 imágenes/);
+  assert.match(text, /546 MB.*en disco/s, 'total por id único');
+  assert.match(text, /135 MB.*recuperables/s);
+
+  const rows = [...app.document.querySelectorAll('tbody tr')];
+  assert.equal(rows.length, 2);
+  const inUse = rows.find((row) => row.textContent.includes('pgvector'));
+  const free = rows.find((row) => row.textContent.includes('nginx'));
+  assert.ok(inUse.querySelector('button').disabled, 'la imagen en uso no se puede borrar');
+  assert.ok(!free.querySelector('button').disabled, 'la imagen sin usar sí');
+});
+
+test('el formulario de base de datos deshabilita la RAM al marcar sin límite', async () => {
+  const app = await mount({ token: 'x'.repeat(40) });
+  await app.click('button', 'Añadir recurso');
+  await app.click('.type-card', 'Base de datos');
+
+  const memory = app.document.querySelector('input[type=number][max="16384"]');
+  assert.ok(memory, 'debe existir el campo de RAM');
+  assert.ok(!memory.disabled, 'por defecto se puede escribir');
+  assert.match(app.currentText(), /Sin límite de RAM/);
+
+  await app.toggle('label', 'Sin límite de RAM');
+  const after = app.document.querySelector('input[type=number][max="16384"]');
+  assert.ok(after.disabled, 'al marcar sin límite el campo se deshabilita');
+  assert.match(app.currentText(), /toda la memoria disponible del VPS/);
 });
 
 let failures = 0;

@@ -5,7 +5,6 @@ import { BrandIcon } from '../ui/BrandIcon.jsx';
 import { Modal } from '../ui/Modal.jsx';
 import { Button } from '../ui/Primitives.jsx';
 import { DatabaseForm } from './DatabaseForm.jsx';
-import { ImageForm } from './ImageForm.jsx';
 import { RepositoryForm } from './RepositoryForm.jsx';
 import { ComposeTextForm } from './ComposeTextForm.jsx';
 import { ResultPanel } from './ResultPanel.jsx';
@@ -17,13 +16,6 @@ const TYPES = [
     description: 'PostgreSQL, MySQL, MariaDB, MongoDB o Redis con volumen y healthcheck.',
     icon: <Database size={24} />,
     form: DatabaseForm,
-  },
-  {
-    id: 'image',
-    title: 'Imagen de Docker Hub',
-    description: 'Busca la imagen, elige la etiqueta y el panel escribe el Compose.',
-    icon: <BrandIcon slug="docker" size={26} />,
-    form: ImageForm,
   },
   {
     id: 'repository',
@@ -59,7 +51,6 @@ export function AddResource({ open, onClose, onCreated }) {
   const disabledReason = (id) => {
     if (!info?.docker?.available) return 'Docker no está accesible para Tinkiva';
     if (!info?.docker?.compose_version) return 'Requiere Docker Compose';
-    if (id === 'image' && !capabilities.curl) return 'Requiere curl en el servidor';
     if (id === 'repository' && !capabilities.git) return 'Requiere git en el servidor';
     if (id === 'repository' && !info?.github_connected) return 'Conecta GitHub primero';
     return null;

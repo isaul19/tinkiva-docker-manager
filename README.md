@@ -74,8 +74,8 @@ En reposo, el proceso utiliza aproximadamente:
 | ---------------------- | ---------------: |
 | Memoria privada típica | **≈ 0.7–1.2 MB** |
 | RSS observado en Linux |         ≈ 2–3 MB |
-| Binario release        |         ≈ 935 KB |
-| Frontend compilado     |         ≈ 156 KB |
+| Binario release        |         ≈ 943 KB |
+| Frontend compilado     |         ≈ 155 KB |
 | Frontend gzip          |          ≈ 53 KB |
 
 La diferencia entre memoria privada y RSS se debe principalmente a páginas compartidas con el
@@ -136,6 +136,8 @@ Desde el panel puedes:
 - reiniciar contenedores
 - consultar procesos del servidor
 - consultar disco, swap, carga y uptime
+- ver las imágenes locales con su peso y borrar las que no usa ningún contenedor
+- exportar bases de datos PostgreSQL, MySQL y MariaDB a `.sql`
 
 Tinkiva utiliza directamente el Docker CLI instalado en el servidor.
 
@@ -158,24 +160,17 @@ Conecta una GitHub App y selecciona:
 
 Tinkiva puede detectar cambios y redesplegar automáticamente.
 
-### Imagen Docker
-
-Puedes utilizar imágenes desde:
-
-- Docker Hub
-- GHCR
-- registries compatibles
-
-Ejemplo:
-
-```text
-ghcr.io/usuario/api:sha-a48da8f
-```
-
-### Docker Compose existente
+### Docker Compose
 
 Si ya tienes una aplicación funcionando mediante Compose, puedes registrarla sin modificar su
-estructura.
+estructura. También es la vía para levantar una imagen suelta de cualquier registro —Docker
+Hub, GHCR o uno privado—: pegas su Compose y el panel lo guarda como recurso editable.
+
+```yaml
+services:
+  api:
+    image: ghcr.io/usuario/api:sha-a48da8f
+```
 
 ### Bases de datos
 
@@ -194,7 +189,7 @@ Cada recurso incluye automáticamente:
 - volumen persistente
 - healthcheck
 - `restart: unless-stopped`
-- límite de RAM configurable
+- límite de RAM configurable, con opción de no imponer ninguno
 - `no-new-privileges`
 - red Docker privada
 - contraseña generada
