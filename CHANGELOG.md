@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.0 — 2026-08-15
+
+### Cambio de nombre del binario
+
+- El comando pasa a llamarse `tmanager` (antes `tinkivadm`). El instalador, el
+  servicio systemd y los scripts de build se actualizaron; el workflow de release
+  ahora empaqueta el binario `tmanager`.
+
+### Nuevas funcionalidades
+
+- **Consola en Contenedores**: terminal integrada en la vista de contenedores.
+- **VPC externo en bases de datos**: permite conectar una base de datos a un VPC
+  externo desde el formulario de creación.
+- **Acciones unificadas**: los botones de acción de cada recurso se agrupan en un
+  solo botón.
+
+### Correcciones
+
+- Paginación corregida y estados del panel localizados.
+- El token administrador se muestra una sola vez al generarlo, también cuando se
+  regenera con configuración existente (antes solo aparecía en la primera configuración).
+- Sin desbordamiento horizontal en la salida de consola.
+- Ajustes de estilos, inputs y distribución del Resumen.
+
 ## 0.8.1 — 2026-08-15
 
 - Memoria del host: `usada` y `disponible` ahora derivan ambas de `MemAvailable`

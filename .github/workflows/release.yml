@@ -41,7 +41,7 @@ jobs:
         run: |
           mkdir -p dist
 
-          cp target/${{ matrix.target }}/release/tinkivadm \
+          cp target/${{ matrix.target }}/release/tmanager \
             dist/tinkiva-docker-manager-linux-${{ matrix.arch }}
 
           chmod +x \
