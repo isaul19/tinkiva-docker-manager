@@ -30,7 +30,7 @@ impl Store {
     pub fn projects(&self) -> Result<Vec<Project>, String> {
         let state = self.lock()?;
         let mut projects = state.projects.clone();
-        projects.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+        projects.sort_by_key(|project| project.name.to_lowercase());
         Ok(projects)
     }
 

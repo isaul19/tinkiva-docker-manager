@@ -215,8 +215,7 @@ fn read_disk() -> Result<(u64, u64, u64, f64), String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let line = stdout
         .lines()
-        .filter(|line| !line.trim().is_empty())
-        .next_back()
+        .rfind(|line| !line.trim().is_empty())
         .ok_or_else(|| "df no devolvió datos".to_owned())?;
     let mut values = line.split_whitespace();
     let total = values.next().and_then(|value| value.parse().ok()).unwrap_or(0);

@@ -52,12 +52,12 @@ El estado local vive en ./tinkiva-docker-manager/ — config, pid, log, datos y 
 
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    if arguments.first().map(String::as_str) != Some("__serve") {
+    if arguments.first().map(String::as_str) != Some(daemon::SERVE_FLAG) {
         setup::migrate_legacy_state();
     }
     let first = arguments.first();
     let outcome = match first.map(String::as_str) {
-        Some("__serve") => serve_with_pidfile(),
+        Some(daemon::SERVE_FLAG) => serve_with_pidfile(),
         Some("start") => run_start(),
         Some("stop") => daemon::stop(),
         Some("status") => daemon::status(),

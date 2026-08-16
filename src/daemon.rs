@@ -6,7 +6,9 @@ use std::process::{ Command, Stdio };
 use std::thread;
 use std::time::Duration;
 
-const SERVE_FLAG: &str = "__serve";
+/// Bandera interna con la que el proceso hijo sabe que le toca servir. No es un
+/// comando público: `main` la compara y la vuelve a pasar al relanzarse.
+pub const SERVE_FLAG: &str = "__serve";
 
 fn state_dir() -> PathBuf {
     crate::setup::state_root()
@@ -18,10 +20,6 @@ pub fn pid_file() -> PathBuf {
 
 pub fn log_file() -> PathBuf {
     state_dir().join("tinkiva.log")
-}
-
-pub fn is_serve_invocation(argument: Option<&String>) -> bool {
-    argument.is_some_and(|value| value == SERVE_FLAG)
 }
 
 fn read_pid() -> Option<u32> {

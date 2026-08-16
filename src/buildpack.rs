@@ -5,7 +5,7 @@
 
 use crate::json::Json;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const GENERATED_DOCKERFILE: &str = ".tinkiva.Dockerfile";
 pub const BLUEPRINT_FILE: &str = ".tinkiva.Dockerfile";
@@ -279,6 +279,7 @@ fn read_small(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn fixture() -> PathBuf {

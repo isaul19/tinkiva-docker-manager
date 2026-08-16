@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone)]
 pub struct CommandResult {
     pub success: bool,
-    pub code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
     pub timed_out: bool,
@@ -154,7 +153,6 @@ where
 
     Ok(CommandResult {
         success: status.success() && !timed_out,
-        code: status.code(),
         stdout,
         stderr,
         timed_out,
@@ -298,7 +296,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn captures_output_and_exit_code() {
+    fn captures_output_of_a_failed_command() {
         let result = run(
             Path::new("/bin/sh"),
             ["-c", "echo hola; echo fallo >&2; exit 3"],
@@ -309,7 +307,6 @@ mod tests {
         .unwrap();
 
         assert!(!result.success);
-        assert_eq!(result.code, Some(3));
         assert_eq!(result.stdout.trim(), "hola");
         assert_eq!(result.summary(), "fallo");
     }
@@ -352,7 +349,6 @@ mod tests {
     fn redaction_hides_credentials_from_summaries() {
         let result = CommandResult {
             success: false,
-            code: Some(128),
             stdout: String::new(),
             stderr: "fatal: no se pudo acceder con ghs_tokensupersecreto".to_owned(),
             timed_out: false,
