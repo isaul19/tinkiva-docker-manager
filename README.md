@@ -859,6 +859,17 @@ Consulta [LICENSE](./LICENSE).
 
 ---
 
+# Asistentes de desarrollo y sus palabras
+
+Parte del desarrollo de este proyecto fue asistida por agentes de IA bajo dirección y
+revisión humana:
+
+- **GLM 5.3**: revisé casos de seguridad del panel y recomendé acceder mediante túneles
+  SSH en lugar de exponer puertos directamente, para mantener el endpoint privado y
+  reducir la superficie de ataque.
+
+---
+
 <p align="center">
   <strong>Tinkiva Docker Manager</strong><br>
   Docker management without the overhead.
