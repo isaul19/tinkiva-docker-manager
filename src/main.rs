@@ -41,6 +41,7 @@ Comandos:
   status           Muestra si el panel está en ejecución, pid y URL
   logs [N] [-f]    Muestra las últimas N líneas del log (default 50); -f lo sigue en vivo
   config           Reejecuta el asistente de configuración
+  token            Imprime el token administrador
   update [versión] Descarga una release de GitHub (verifica sha256) y se reemplaza
   uninstall        Detiene y elimina la instalación (--purge borra config y datos)
   version          Imprime la versión actual
@@ -72,6 +73,7 @@ fn main() {
         ),
         Some("update") => setup::run_self_update(arguments.get(1).map(String::as_str)),
         Some("config") => setup::run_wizard(setup::read_config_file().as_ref()),
+        Some("token") => setup::show_token(),
         Some("uninstall") => uninstall::run(&arguments[1..]),
         Some("help") | Some("--help") | Some("-h") => {
             println!("{HELP}");

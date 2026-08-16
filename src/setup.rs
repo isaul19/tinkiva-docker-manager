@@ -114,6 +114,39 @@ fn valid_token(value: &str) -> bool {
     (32..=256).contains(&value.len()) && !value.chars().any(char::is_whitespace)
 }
 
+/// Imprime el token administrador tal cual, sin adornos, para poder usarlo en
+/// tuberías: `curl -H "Authorization: Bearer $(tmanager token)" …`.
+pub fn show_token() -> Result<(), String> {
+    if let Ok(token) = std::env::var("TDM_ADMIN_TOKEN") {
+        if valid_token(&token) {
+            println!("{token}");
+            return Ok(());
+        }
+    }
+    if let Some(settings) = read_config_file() {
+        if let Some(token) = settings.get("TDM_ADMIN_TOKEN") {
+            println!("{token}");
+            return Ok(());
+        }
+    }
+
+    let path = config_path();
+    match std::fs::read_to_string(&path) {
+        Ok(_) => Err(format!(
+            "{} no contiene un TDM_ADMIN_TOKEN válido (32–256 caracteres sin espacios). Ejecuta tmanager config.",
+            path.display()
+        )),
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => Err(format!(
+            "sin permisos para leer {}. Repite el comando con sudo.",
+            path.display()
+        )),
+        Err(_) => Err(format!(
+            "no hay configuración en {}. Ejecuta tmanager config para crearla.",
+            path.display()
+        )),
+    }
+}
+
 pub fn show_menu() -> Result<MenuChoice, String> {
     let stdin = io::stdin();
     let mut reader = stdin.lock();

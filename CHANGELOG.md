@@ -4,6 +4,9 @@
 
 ### Nuevas funcionalidades
 
+- **`tmanager token`**: imprime el token administrador leído de `TDM_ADMIN_TOKEN` o
+  del archivo de configuración. Solo el token, sin adornos, para usarlo directamente
+  en `curl -H "Authorization: Bearer $(tmanager token)"`.
 - **`tmanager uninstall`**: desinstala desde el propio binario, tanto la instalación
   con systemd como la local. Detiene el panel, elimina servicio, binario, documentación,
   pid y log; con `--purge` también configuración, datos, historial y el usuario

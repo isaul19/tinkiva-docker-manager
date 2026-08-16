@@ -159,6 +159,7 @@ Si ya existe configuración, ejecutar `tmanager` a secas muestra un menú: inici
 | `tmanager status` | Muestra si está en ejecución, el pid y la URL del panel. |
 | `tmanager logs [N] [-f]` | Últimas N líneas del log (default 50); `-f` lo sigue en vivo. |
 | `tmanager config` | Reejecuta el asistente; tus valores actuales se ofrecen como default. |
+| `tmanager token` | Imprime el token administrador (solo el token, apto para tuberías). |
 | `tmanager update [versión]` | Descarga una release de GitHub, verifica sha256 y se reemplaza. |
 | `tmanager uninstall [--purge] [--yes]` | Detiene el panel y elimina la instalación. Ver abajo. |
 | `tmanager version` | Imprime la versión actual. |
