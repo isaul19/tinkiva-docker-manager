@@ -1,6 +1,6 @@
 # Changelog
 
-## No publicado
+## 0.13.0 — 2026-08-19
 
 ### Importación de SQL
 
