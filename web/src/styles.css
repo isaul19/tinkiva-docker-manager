@@ -1825,3 +1825,8 @@ code {
    dejaría fuera del árbol accesible, así que se oculta sin sacarlo. */
 .env-file { position:absolute; width:1px; height:1px; padding:0; border:0; opacity:0; pointer-events:none; }
 @media (max-width:640px) { .env-row { grid-template-columns:minmax(0,1fr) auto; } .env-row .env-value { grid-column:1 / -1; } .env-row-head span:nth-child(2) { display:none; } }
+
+/* Importacion de SQL */
+.import-file { display:flex; flex-wrap:wrap; align-items:center; gap:.6rem; position:relative; }
+.import-file-name { color:var(--text); font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.78rem; }
+.import-output { max-height:220px; }

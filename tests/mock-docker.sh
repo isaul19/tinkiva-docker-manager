@@ -67,7 +67,7 @@ elif [[ "$args" == *" exec "* ]]; then
   # El sondeo de clientes se comprueba antes que los scripts de exportación:
   # el propio sondeo menciona psql y pg_dump.
   if [[ "$args" == *'id -un'* ]]; then
-    if [[ "$2" == 'postgres' ]]; then
+    if [[ "$args" == *' postgres '* ]]; then
       printf 'USER=postgres\npsql=1\n'
     else
       printf 'USER=node\n'
@@ -78,6 +78,12 @@ elif [[ "$args" == *" exec "* ]]; then
     for database in "${@:7}"; do
       printf -- '-- tinkiva: %s\nCREATE TABLE demo();\n' "$database"
     done
+  elif [[ "$args" == *'ON_ERROR_STOP'* ]]; then
+    # Restauración: el volcado llega por la entrada estándar, así que el mock lo
+    # consume entero y responde con lo que recibió. Es lo único que demuestra que
+    # el archivo subido llegó hasta el cliente de la base de datos.
+    bytes=$(cat | wc -c)
+    printf 'restaurado en %s: %s bytes\n' "${*: -1}" "$bytes"
   else
     printf 'mock docker: exec no implementado: %s\n' "$*" >&2
     exit 2

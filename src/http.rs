@@ -1,9 +1,10 @@
-use crate::util::parse_urlencoded;
+use crate::util::{parse_urlencoded, unique_suffix};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -11,6 +12,10 @@ const MAX_HEADER_BYTES: usize = 32 * 1024;
 /// Los webhooks de `push` de GitHub incluyen la lista de commits, así que el
 /// límite anterior de 128 KiB se quedaba corto en pushes grandes.
 const MAX_BODY_BYTES: usize = 512 * 1024;
+/// Las subidas de volcados SQL no pasan por memoria: se escriben en un temporal
+/// mientras llegan, así que aquí el techo puede ser el de un `.sql` de verdad.
+const MAX_UPLOAD_BYTES: usize = 1024 * 1024 * 1024;
+const UPLOAD_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug)]
 pub struct Request {
@@ -19,6 +24,9 @@ pub struct Request {
     pub query: HashMap<String, String>,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
+    /// Cuerpo que se guardó en disco en vez de en `body`. Solo lo tienen las
+    /// rutas de subida; el handler lo consume y `discard_upload` lo borra.
+    pub upload: Option<PathBuf>,
 }
 
 impl Request {
@@ -26,6 +34,15 @@ impl Request {
         self.headers
             .get(&name.to_ascii_lowercase())
             .map(String::as_str)
+    }
+
+    /// Borra el temporal de la subida. Se llama siempre al cerrar la conexión,
+    /// haya ido bien la petición o no: si no, un `.sql` de un giga se quedaría
+    /// en /tmp hasta el próximo reinicio.
+    pub fn discard_upload(&self) {
+        if let Some(path) = &self.upload {
+            let _ = fs::remove_file(path);
+        }
     }
 
     pub fn form(&self) -> Result<HashMap<String, String>, String> {
@@ -331,23 +348,35 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, HttpReadError> {
         .get("content-length")
         .map_or(Ok(0), |value| value.parse::<usize>())
         .map_err(|_| HttpReadError::BadRequest("Content-Length inválido"))?;
-    if content_length > MAX_BODY_BYTES {
+
+    let (path, raw_query) = target.split_once('?').unwrap_or((target, ""));
+    let streamed = is_upload(method, path, &headers);
+    if content_length > if streamed { MAX_UPLOAD_BYTES } else { MAX_BODY_BYTES } {
         return Err(HttpReadError::PayloadTooLarge);
     }
 
-    let mut body = buffer[header_end..].to_vec();
-    while body.len() < content_length {
-        let remaining = content_length - body.len();
-        let mut chunk = vec![0_u8; remaining.min(4096)];
-        let read = stream.read(&mut chunk).map_err(HttpReadError::Io)?;
-        if read == 0 {
-            return Err(HttpReadError::BadRequest("cuerpo incompleto"));
+    let mut body = Vec::new();
+    let mut upload = None;
+    if streamed {
+        upload = Some(stream_body_to_file(
+            stream,
+            &buffer[header_end..],
+            content_length,
+        )?);
+    } else {
+        body = buffer[header_end..].to_vec();
+        while body.len() < content_length {
+            let remaining = content_length - body.len();
+            let mut chunk = vec![0_u8; remaining.min(4096)];
+            let read = stream.read(&mut chunk).map_err(HttpReadError::Io)?;
+            if read == 0 {
+                return Err(HttpReadError::BadRequest("cuerpo incompleto"));
+            }
+            body.extend_from_slice(&chunk[..read]);
         }
-        body.extend_from_slice(&chunk[..read]);
+        body.truncate(content_length);
     }
-    body.truncate(content_length);
 
-    let (path, raw_query) = target.split_once('?').unwrap_or((target, ""));
     let query = parse_urlencoded(raw_query)
         .map_err(|_| HttpReadError::BadRequest("query string inválido"))?;
 
@@ -357,7 +386,64 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, HttpReadError> {
         query,
         headers,
         body,
+        upload,
     })
+}
+
+/// Rutas cuyo cuerpo se escribe en disco en vez de en memoria.
+///
+/// Se exige la cabecera `Authorization`: el token se valida más adelante, pero
+/// sin esta comprobación cualquiera podría hacer que el panel escribiera un giga
+/// en `/tmp` antes de recibir su 401.
+fn is_upload(method: &str, path: &str, headers: &HashMap<String, String>) -> bool {
+    method.eq_ignore_ascii_case("POST")
+        && headers.contains_key("authorization")
+        && path.starts_with("/api/containers/")
+        && path.ends_with("/import")
+}
+
+/// Vuelca el cuerpo en un temporal 0600, empezando por lo que ya se leyó junto
+/// a las cabeceras. Si algo falla, el archivo se borra antes de devolver.
+fn stream_body_to_file(
+    stream: &mut TcpStream,
+    prefix: &[u8],
+    content_length: usize,
+) -> Result<PathBuf, HttpReadError> {
+    // Subir cientos de megabytes desde una conexión doméstica tiene pausas más
+    // largas que los 10 s con los que se leen las cabeceras.
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
+
+    let path = std::env::temp_dir().join(format!("tdm-upload-{}.bin", unique_suffix()));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(HttpReadError::Io)?;
+
+    let mut written = prefix.len().min(content_length);
+    let outcome = (|| -> Result<(), HttpReadError> {
+        file.write_all(&prefix[..written]).map_err(HttpReadError::Io)?;
+        let mut chunk = vec![0_u8; UPLOAD_CHUNK_BYTES];
+        while written < content_length {
+            let wanted = (content_length - written).min(UPLOAD_CHUNK_BYTES);
+            let read = stream.read(&mut chunk[..wanted]).map_err(HttpReadError::Io)?;
+            if read == 0 {
+                return Err(HttpReadError::BadRequest("cuerpo incompleto"));
+            }
+            file.write_all(&chunk[..read]).map_err(HttpReadError::Io)?;
+            written += read;
+        }
+        file.flush().map_err(HttpReadError::Io)
+    })();
+
+    match outcome {
+        Ok(()) => Ok(path),
+        Err(error) => {
+            let _ = fs::remove_file(&path);
+            Err(error)
+        }
+    }
 }
 
 #[derive(Debug)]

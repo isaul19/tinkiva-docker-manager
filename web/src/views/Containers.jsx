@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { Container, Download, FileTerminal, FileText, MoreHorizontal, Play, RotateCw, Square } from 'lucide-preact';
+import { Container, Download, FileTerminal, FileText, MoreHorizontal, Play, RotateCw, Square, Upload } from 'lucide-preact';
 import { api } from '../lib/api.js';
 import { useApp } from '../lib/context.js';
 import { useAsync, usePolling } from '../lib/hooks.js';
@@ -18,6 +18,7 @@ import {
 import { useToast } from '../ui/Toast.jsx';
 import { LogsDialog } from './LogsDialog.jsx';
 import { DatabaseExportDialog } from './DatabaseExportDialog.jsx';
+import { DatabaseImportDialog } from './DatabaseImportDialog.jsx';
 import { Field, Input, TextArea } from '../ui/Form.jsx';
 import { Modal } from '../ui/Modal.jsx';
 
@@ -56,6 +57,7 @@ export function Containers() {
   const [logsFor, setLogsFor] = useState(null);
   const [consoleFor, setConsoleFor] = useState(null);
   const [exportFor, setExportFor] = useState(null);
+  const [importFor, setImportFor] = useState(null);
   const [actionMenu, setActionMenu] = useState(null);
   const [page, setPage] = useState(0);
 
@@ -95,7 +97,7 @@ export function Containers() {
     }
     const rect = button.getBoundingClientRect();
     const exportable = running && looksLikeSqlDatabase(container.image);
-    const menuHeight = (running ? 172 : 48) + (exportable ? 42 : 0);
+    const menuHeight = (running ? 172 : 48) + (exportable ? 84 : 0);
     const openUpward = rect.bottom + menuHeight > window.innerHeight - 12;
     setActionMenu({
       container,
@@ -206,6 +208,9 @@ export function Containers() {
       {exportFor ? (
         <DatabaseExportDialog container={exportFor} onClose={() => setExportFor(null)} />
       ) : null}
+      {importFor ? (
+        <DatabaseImportDialog container={importFor} onClose={() => setImportFor(null)} />
+      ) : null}
       {actionMenu ? (
         <div class="action-menu-items action-menu-popover" role="menu" style={`left:${actionMenu.left}px; top:${actionMenu.top}px`}>
           <button type="button" role="menuitem" onClick={() => { setActionMenu(null); setLogsFor(actionMenu.container.name); }}>
@@ -222,6 +227,12 @@ export function Containers() {
                 <button type="button" role="menuitem" onClick={() => { setActionMenu(null); setExportFor(actionMenu.container.name); }}>
                   <Download size={15} />
                   Exportar SQL
+                </button>
+              ) : null}
+              {actionMenu.exportable ? (
+                <button type="button" role="menuitem" onClick={() => { setActionMenu(null); setImportFor(actionMenu.container.name); }}>
+                  <Upload size={15} />
+                  Importar SQL
                 </button>
               ) : null}
               <button type="button" role="menuitem" disabled={busy === `${actionMenu.container.name}:restart`} onClick={() => { setActionMenu(null); act(actionMenu.container.name, 'restart'); }}>

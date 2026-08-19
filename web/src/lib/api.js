@@ -58,6 +58,12 @@ async function request(method, path, options = {}) {
     headers['Content-Type'] = 'application/x-www-form-urlencoded';
     body = encodeForm(options.form);
   }
+  // El archivo viaja como cuerpo crudo: el navegador lo transmite en streaming
+  // y el panel lo escribe en disco según llega, sin pasar por memoria.
+  if (options.file) {
+    headers['Content-Type'] = 'application/sql';
+    body = options.file;
+  }
 
   let response;
   try {
@@ -118,6 +124,9 @@ export const api = {
 
   /** POST que devuelve un archivo. El nombre lo pone quien llama. */
   download: (path, form) => request('POST', path, { form: form || {}, asBlob: true }),
+
+  /** POST de un archivo del disco del usuario como cuerpo de la petición. */
+  upload: (path, file, query) => request('POST', `${path}${buildQuery(query)}`, { file }),
 
   /** Valida un token contra /api/info antes de guardarlo. */
   async signIn(candidate) {

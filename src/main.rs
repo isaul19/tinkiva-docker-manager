@@ -240,6 +240,9 @@ fn handle_connection(app: &App, stream: &mut TcpStream) {
             if let Err(error) = response.write_to(stream, head_only) {
                 eprintln!("error enviando respuesta HTTP: {error}");
             }
+            // El temporal de una subida se borra pase lo que pase con la
+            // respuesta: el handler ya lo ha consumido a estas alturas.
+            request.discard_upload();
         }
         Err(error) => {
             if let Some(response) = error.response() {

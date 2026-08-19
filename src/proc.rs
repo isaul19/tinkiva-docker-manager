@@ -7,7 +7,7 @@
 
 use crate::util::{truncate_text, unique_suffix};
 use std::ffi::OsStr;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -63,7 +63,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    run_with_input(binary, arguments, working_directory, environment, None, timeout)
+    execute(binary, arguments, working_directory, environment, Input::None, timeout)
 }
 
 /// Igual que [`run`] pero escribiendo `input` en la entrada estándar del hijo.
@@ -75,6 +75,54 @@ pub fn run_with_input<I, S>(
     working_directory: Option<&Path>,
     environment: &[(&str, &str)],
     input: Option<&str>,
+    timeout: Duration,
+) -> Result<CommandResult, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let input = input.map_or(Input::None, Input::Text);
+    execute(binary, arguments, working_directory, environment, input, timeout)
+}
+
+/// Igual que [`run`] pero conectando un archivo a la entrada estándar del hijo.
+/// El kernel hace de intermediario: un `.sql` de importación puede pesar cientos
+/// de megabytes y el panel nunca llega a tenerlo en memoria.
+pub fn run_with_file_input<I, S>(
+    binary: &Path,
+    arguments: I,
+    working_directory: Option<&Path>,
+    environment: &[(&str, &str)],
+    input: &Path,
+    timeout: Duration,
+) -> Result<CommandResult, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    execute(
+        binary,
+        arguments,
+        working_directory,
+        environment,
+        Input::File(input),
+        timeout,
+    )
+}
+
+/// Origen de la entrada estándar del proceso hijo.
+enum Input<'a> {
+    None,
+    Text(&'a str),
+    File(&'a Path),
+}
+
+fn execute<I, S>(
+    binary: &Path,
+    arguments: I,
+    working_directory: Option<&Path>,
+    environment: &[(&str, &str)],
+    input: Input<'_>,
     timeout: Duration,
 ) -> Result<CommandResult, String>
 where
@@ -105,10 +153,23 @@ where
         }
     };
 
+    let stdin = match &input {
+        Input::None => Stdio::null(),
+        Input::Text(_) => Stdio::piped(),
+        Input::File(path) => match File::open(path) {
+            Ok(file) => Stdio::from(file),
+            Err(error) => {
+                let _ = fs::remove_file(&stdout_path);
+                let _ = fs::remove_file(&stderr_path);
+                return Err(format!("no se pudo leer {}: {error}", path.display()));
+            }
+        },
+    };
+
     let mut command = Command::new(binary);
     command
         .args(arguments)
-        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(stdin)
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file));
     for (key, value) in environment {
@@ -128,7 +189,7 @@ where
         }
     };
 
-    if let Some(input) = input {
+    if let Input::Text(input) = input {
         // El descriptor se cierra al salir del bloque: sin EOF el hijo esperaría
         // para siempre y el timeout lo mataría sin haber hecho nada.
         if let Some(mut stdin) = child.stdin.take() {

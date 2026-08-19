@@ -240,6 +240,11 @@ const API = {
     database_label: 'PostgreSQL',
     schemas: ['storagia', 'postgres'],
   },
+  '/api/containers/storagia-postgres/import': {
+    database: 'postgres',
+    database_label: 'PostgreSQL',
+    schemas: ['storagia', 'postgres'],
+  },
 };
 
 /** Monta el bundle en un DOM limpio y devuelve utilidades de inspección. */
@@ -695,6 +700,28 @@ test('el editor de variables reparte el .env en filas de clave y valor', async (
   assert.match(text, /Importar \.env/);
   assert.match(text, /Editar como texto/);
   assert.match(text, /TDM_MEMORY_LIMIT/, 'sigue avisando de las claves gestionadas');
+});
+
+test('el menu de una base de datos ofrece importar un .sql', async () => {
+  const app = await mount({ token: 'x'.repeat(40), hash: '#/containers' });
+  await app.click('button', 'Acciones para storagia-postgres');
+  assert.match(app.currentText(), /Importar SQL/, 'importar acompana a exportar');
+
+  await app.click('button', 'Importar SQL');
+  assert.ok(
+    app.calls.includes('/api/containers/storagia-postgres/import'),
+    'debe consultar el motor y las bases de destino',
+  );
+
+  const text = app.currentText();
+  assert.match(text, /Base de datos de destino/);
+  assert.match(text, /storagia/, 'debe listar las bases del contenedor');
+  assert.match(text, /Elegir archivo \.sql/);
+  assert.match(text, /Ningun archivo elegido|Ningún archivo elegido/);
+
+  const picker = app.document.querySelector('input[type=file]');
+  assert.ok(picker, 'debe haber un selector de archivo');
+  assert.match(picker.getAttribute('accept') || '', /\.sql/);
 });
 
 let failures = 0;

@@ -139,6 +139,7 @@ Desde el panel puedes:
 - ver las imágenes locales con su peso y borrar las que no usa ningún contenedor
 - descargar imágenes privadas de Amazon ECR con un access key de solo lectura
 - exportar bases de datos PostgreSQL, MySQL y MariaDB a `.sql`
+- importar un `.sql` en esas mismas bases desde el propio panel
 
 Tinkiva utiliza directamente el Docker CLI instalado en el servidor.
 

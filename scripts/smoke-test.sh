@@ -117,6 +117,38 @@ grep -q -- '-- tinkiva: storagia' "$TMP/export.sql"
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${FORM[@]}" -X POST \
   "$BASE/api/containers/postgres/export" -d 'mode=all&schemas=--host%3Devil')" == '400' ]]
 
+# Importación SQL: el archivo sube como cuerpo crudo, el panel lo escribe en un
+# temporal según llega y lo conecta a la entrada estándar del cliente. El mock
+# devuelve el tamaño que recibió, así que la prueba confirma el trayecto entero.
+SQL=(-H 'Content-Type: application/sql')
+printf 'CREATE TABLE demo(id int);\nINSERT INTO demo VALUES (1);\n' > "$TMP/import.sql"
+IMPORT_BYTES=$(wc -c < "$TMP/import.sql")
+curl -fsS "${AUTH[@]}" "${SQL[@]}" -X POST \
+  "$BASE/api/containers/postgres/import?schema=storagia" \
+  --data-binary "@$TMP/import.sql" \
+  | jq -e --argjson bytes "$IMPORT_BYTES" \
+    '.ok == true and .bytes == $bytes and (.output | contains("restaurado en storagia: \($bytes) bytes"))' >/dev/null
+
+# El temporal de la subida no puede quedarse en el disco del servidor.
+[[ -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'tdm-upload-*' 2>/dev/null)" ]]
+
+# Un archivo vacío, un destino inválido, uno ausente y un contenedor que no es
+# base de datos se rechazan antes de tocar Docker.
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${SQL[@]}" -X POST \
+  "$BASE/api/containers/postgres/import?schema=storagia" --data-binary '')" == '400' ]]
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${SQL[@]}" -X POST \
+  "$BASE/api/containers/postgres/import?schema=--host%3Devil" \
+  --data-binary "@$TMP/import.sql")" == '400' ]]
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${SQL[@]}" -X POST \
+  "$BASE/api/containers/postgres/import" --data-binary "@$TMP/import.sql")" == '400' ]]
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${SQL[@]}" -X POST \
+  "$BASE/api/containers/app/import?schema=storagia" \
+  --data-binary "@$TMP/import.sql")" == '422' ]]
+# Sin token no se escribe nada en disco: la subida ni siquiera se acepta.
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${SQL[@]}" -X POST \
+  "$BASE/api/containers/postgres/import?schema=storagia" \
+  --data-binary "@$TMP/import.sql")" == '401' ]]
+
 # Imágenes: se listan con su peso y solo se pueden borrar las que nadie usa.
 curl -fsS "${AUTH[@]}" "$BASE/api/images" | jq -e 'length == 4' >/dev/null
 curl -fsS "${AUTH[@]}" "$BASE/api/images" \

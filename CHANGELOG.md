@@ -1,5 +1,34 @@
 # Changelog
 
+## No publicado
+
+### Importación de SQL
+
+- **«Importar SQL» en el menú de un contenedor de base de datos**, junto a la exportación que ya
+  existía. Se elige la base de destino, se sube un `.sql` y lo ejecuta el mismo cliente que vive
+  dentro del contenedor (`psql`, `mysql` o `mariadb`), igual que el volcado lo genera el `pg_dump`
+  de dentro. El panel no interpreta el SQL.
+- El archivo **no pasa por la memoria del panel**: llega como cuerpo crudo y `read_request` lo
+  escribe en un temporal 0600 según entra, que después se conecta a la entrada estándar de
+  `docker exec -i`. El techo de subida son 1024 MiB, frente a los 512 KiB del resto de peticiones,
+  y el temporal se borra al cerrar la conexión pase lo que pase con la respuesta. Solo se acepta
+  el trayecto en streaming con la cabecera `Authorization` presente, para que nadie sin token
+  pueda hacer escribir un giga en `/tmp`.
+- La base de destino viaja como argumento posicional del script, nunca interpolada, igual que en
+  la exportación. PostgreSQL corre con `ON_ERROR_STOP=1` —se detiene en el primer error en vez de
+  dejar media base— pero sin envolver la restauración en una transacción, porque un volcado hecho
+  con `--create` trae `CREATE DATABASE` y PostgreSQL lo prohíbe dentro de una.
+
+### Correcciones
+
+- **Un backend dejó de detectarse como base de datos.** La consola de un contenedor se abría en
+  modo PostgreSQL —con su campo «Consulta» y su `SELECT * FROM …`— en cuanto el contenedor
+  mencionaba `postgres` y `5432` en dos señales cualesquiera, y una `DATABASE_URL` apuntando a la
+  base ya cumplía las dos. Ahora manda el cliente instalado dentro: sin `psql` no hay consola de
+  PostgreSQL que abrir, porque no hay con qué. Hace falta además una señal estructural —la imagen,
+  el proceso o un puerto expuesto—, y el entorno queda fuera del cálculo. Detectar el motor
+  también ahorra ahora un `docker inspect` por apertura de consola.
+
 ## 0.12.0 — 2026-08-19
 
 ### Editor de variables de entorno en filas

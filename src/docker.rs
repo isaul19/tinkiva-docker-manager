@@ -583,16 +583,6 @@ impl DockerClient {
         let command = fields.get(2).copied().unwrap_or_default().to_ascii_lowercase();
         let ports = fields.get(3).copied().unwrap_or_default().to_ascii_lowercase();
 
-        let env = self.run(
-            ["inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", container],
-            None,
-            Duration::from_secs(10),
-        )?;
-        if !env.success {
-            return Err(env.summary());
-        }
-        let environment = env.stdout.to_ascii_uppercase();
-
         let probe = self.run(
             [
                 "exec",
@@ -614,7 +604,7 @@ impl DockerClient {
             .trim();
 
         Ok(ConsoleInfo {
-            database: detect_database(&image, &environment, &ports, &command, &probe_text),
+            database: detect_database(&image, &ports, &command, &probe_text),
             user: if user.is_empty() { "root".to_owned() } else { user.to_owned() },
         })
     }
@@ -721,6 +711,37 @@ impl DockerClient {
             arguments,
             destination,
             &[("DOCKER_CLI_HINTS", "false")],
+            Duration::from_secs(1800),
+        )
+    }
+
+    /// Restaura un `.sql` dentro del contenedor.
+    ///
+    /// El archivo entra por la entrada estándar de `docker exec -i`: no se copia
+    /// dentro del contenedor, no pasa por `argv` y el panel nunca lo carga en
+    /// memoria. El nombre de la base viaja como `$1`, igual que en el volcado.
+    pub fn database_restore(
+        &self,
+        container: &str,
+        engine: &str,
+        schema: &str,
+        source: &Path,
+    ) -> Result<CommandResult, String> {
+        if !valid_container_ref(container) {
+            return Err("identificador de contenedor inválido".to_owned());
+        }
+        if !valid_schema_name(schema) {
+            return Err("nombre de base de datos inválido".to_owned());
+        }
+        let script = restore_script(engine)
+            .ok_or_else(|| "este motor no restaura volcados SQL".to_owned())?;
+
+        proc::run_with_file_input(
+            &self.binary,
+            ["exec", "-i", container, "sh", "-lc", script, "tdm-restore", schema],
+            None,
+            &[("DOCKER_CLI_HINTS", "false")],
+            source,
             Duration::from_secs(1800),
         )
     }
@@ -1035,42 +1056,63 @@ fn dump_script(engine: &str, mode: &str) -> Option<String> {
     Some(format!("{prefix}{flags}{suffix}"))
 }
 
+/// Decide si un contenedor *es* una base de datos, no si *usa* una.
+///
+/// El cliente instalado dentro manda: sin `psql` no hay consola de PostgreSQL
+/// que abrir ni volcado que generar, por muy claro que hable el resto. Y hace
+/// falta una segunda señal estructural —la imagen, el proceso o un puerto
+/// expuesto—, que viene de cómo se construyó el contenedor.
+///
+/// El entorno queda deliberadamente fuera: cualquier backend lleva una
+/// `DATABASE_URL=postgresql://…:5432/…` y con eso bastaba antes para que el
+/// panel tratara una API de Node como si fuera su propia base de datos.
+/// Script de restauración por motor. El cliente lee el `.sql` de su entrada
+/// estándar y la base de destino llega como `$1`; nada de la petición se
+/// interpola en el script.
+///
+/// PostgreSQL se detiene en el primer error (`ON_ERROR_STOP=1`) pero no envuelve
+/// la restauración en una transacción: un volcado hecho con `--create` trae
+/// `CREATE DATABASE`, que PostgreSQL prohíbe dentro de una transacción, y esos
+/// archivos son justo los que la gente trae de otro servidor.
+fn restore_script(engine: &str) -> Option<&'static str> {
+    match engine {
+        "postgres" => Some(
+            "export PGPASSWORD=\"${POSTGRES_PASSWORD:-}\"; exec psql -v ON_ERROR_STOP=1 --quiet -U \"${POSTGRES_USER:-postgres}\" -d \"$1\"",
+        ),
+        "mysql" | "mariadb" => Some(
+            "client=$(command -v mariadb || command -v mysql) || exit 127; password=\"${MYSQL_PASSWORD:-${MARIADB_PASSWORD:-${MYSQL_ROOT_PASSWORD:-${MARIADB_ROOT_PASSWORD:-}}}}\"; [ -z \"$password\" ] || export MYSQL_PWD=\"$password\"; exec \"$client\" -u \"${MYSQL_USER:-${MARIADB_USER:-root}}\" \"$1\"",
+        ),
+        _ => None,
+    }
+}
+
 fn detect_database(
     image: &str,
-    environment: &str,
     ports: &str,
     command: &str,
     clients: &str,
 ) -> Option<&'static str> {
-    let signals = |needles: &[&str]| -> usize {
+    let structural = |needles: &[&str]| -> bool {
         needles
             .iter()
-            .map(|needle| {
-                usize::from(
-                    image.contains(needle)
-                        || environment.contains(&needle.to_ascii_uppercase())
-                        || ports.contains(needle)
-                        || command.contains(needle)
-                        || clients.contains(needle),
-                )
-            })
-            .sum()
+            .any(|needle| image.contains(needle) || ports.contains(needle) || command.contains(needle))
     };
+    let installed = |client: &str| clients.contains(client);
 
     // MariaDB se evalúa antes que MySQL: ambos suelen incluir el cliente mysql.
-    if signals(&["mariadb", "mariadb_", "3306", "mariadb=1"]) >= 2 {
+    if installed("mariadb=1") && structural(&["mariadb", "3306"]) {
         return Some("mariadb");
     }
-    if signals(&["postgres", "postgres_", "5432", "psql=1"]) >= 2 {
+    if installed("psql=1") && structural(&["postgres", "pgvector", "postgis", "timescale", "5432"]) {
         return Some("postgres");
     }
-    if signals(&["mysql", "mysql_", "3306", "mysql=1"]) >= 2 {
+    if installed("mysql=1") && structural(&["mysql", "percona", "3306"]) {
         return Some("mysql");
     }
-    if signals(&["mongo", "mongo_initdb", "27017", "mongosh=1"]) >= 2 {
+    if installed("mongosh=1") && structural(&["mongo", "27017"]) {
         return Some("mongodb");
     }
-    if signals(&["redis", "redis_password", "6379", "redis-cli=1"]) >= 2 {
+    if installed("redis-cli=1") && structural(&["redis", "valkey", "6379"]) {
         return Some("redis");
     }
     None
@@ -1142,6 +1184,24 @@ mod tests {
     }
 
     #[test]
+    fn restore_scripts_read_stdin_and_never_interpolate_the_target() {
+        for engine in ["postgres", "mysql", "mariadb"] {
+            let script = restore_script(engine).unwrap();
+            // La base de destino se lee como argumento posicional, no se pega.
+            assert!(script.contains("\"$1\""));
+            // Sin -c ni -f el cliente toma el volcado de su entrada estándar.
+            assert!(!script.contains(" -f ") && !script.contains(" -c "));
+        }
+        // PostgreSQL corta en el primer error en vez de dejar media base.
+        assert!(restore_script("postgres").unwrap().contains("ON_ERROR_STOP=1"));
+        // Los mismos motores que exportan son los que importan.
+        for engine in ["mongodb", "redis"] {
+            assert!(restore_script(engine).is_none());
+            assert!(!exportable_engine(engine));
+        }
+    }
+
+    #[test]
     fn system_schemas_are_hidden_only_for_mysql_family() {
         assert!(is_system_schema("mysql", "information_schema"));
         assert!(is_system_schema("mariadb", "SYS"));
@@ -1152,16 +1212,40 @@ mod tests {
     #[test]
     fn detects_databases_from_combined_signals() {
         assert_eq!(
-            detect_database("postgres:16", "POSTGRES_DB=app", "5432/tcp", "postgres", "psql=1"),
+            detect_database("postgres:16", "5432/tcp", "postgres", "psql=1"),
             Some("postgres")
         );
+        assert_eq!(detect_database("node:22", "", "node server.js", ""), None);
         assert_eq!(
-            detect_database("node:22", "", "", "node server.js", ""),
+            detect_database("mariadb:11", "3306/tcp", "mariadbd", "mariadb=1"),
+            Some("mariadb")
+        );
+        // Imágenes derivadas: el nombre no dice «postgres» pero el puerto y el
+        // cliente sí.
+        assert_eq!(
+            detect_database("pgvector/pgvector:pg17-trixie", "5432/tcp", "postgres", "psql=1"),
+            Some("postgres")
+        );
+    }
+
+    #[test]
+    fn an_application_that_talks_to_a_database_is_not_one() {
+        // Un backend de Node con su DATABASE_URL apuntando a PostgreSQL: sin
+        // cliente dentro no hay consola SQL que ofrecer.
+        assert_eq!(
+            detect_database(
+                "160358212333.dkr.ecr.us-east-1.amazonaws.com/tinkiva-store-dev:latest",
+                "3000/tcp",
+                "node dist/src/main.js",
+                "user=node",
+            ),
             None
         );
+        // Ni siquiera si alguien instaló psql en la imagen para migraciones:
+        // nada en su estructura dice que sea una base de datos.
         assert_eq!(
-            detect_database("mariadb:11", "MARIADB_DATABASE=app", "3306/tcp", "mariadbd", "mariadb=1"),
-            Some("mariadb")
+            detect_database("tinkiva/api:latest", "3000/tcp", "node dist/src/main.js", "psql=1"),
+            None
         );
     }
 }

@@ -13,7 +13,7 @@ use crate::store::Store;
 use crate::templates::{self, GeneratedResource};
 use crate::util::{
     atomic_write, canonical_existing_within, constant_time_eq, json_string, json_string_array,
-    now_unix, random_hex,
+    now_unix, random_hex, truncate_text,
     read_env_value, remove_env_key, set_env_value, unique_suffix, valid_container_ref,
     valid_db_identifier, valid_display_name, valid_env_key, valid_image_ref, valid_schema_name,
     valid_slug,
@@ -330,10 +330,16 @@ impl App {
                 self.container_console(container, request)
             }
             ("GET", ["api", "containers", container, "export"]) => {
-                self.container_export_info(container)
+                self.container_sql_info(container)
             }
             ("POST", ["api", "containers", container, "export"]) => {
                 self.container_export(container, request)
+            }
+            ("GET", ["api", "containers", container, "import"]) => {
+                self.container_sql_info(container)
+            }
+            ("POST", ["api", "containers", container, "import"]) => {
+                self.container_import(container, request)
             }
             ("POST", ["api", "containers", container, action]) => {
                 self.container_action(container, action)
@@ -936,31 +942,22 @@ impl App {
             None => self.docker.container_exec(container, input),
         };
         match result {
-            Ok(result) => {
-                let mut output = result.stdout;
-                if !result.stderr.trim().is_empty() {
-                    if !output.is_empty() && !output.ends_with('\n') {
-                        output.push('\n');
-                    }
-                    output.push_str(&result.stderr);
-                }
-                Response::json(
-                    200,
-                    format!(
-                        "{{\"ok\":{},\"output\":{}}}",
-                        result.success,
-                        json_string(&output)
-                    ),
-                )
-            }
+            Ok(result) => Response::json(
+                200,
+                format!(
+                    "{{\"ok\":{},\"output\":{}}}",
+                    result.success,
+                    json_string(&console_output(&result))
+                ),
+            ),
             Err(error) => json_error(400, &error),
         }
     }
 
-    /// Motor detectado y bases de datos disponibles para exportar. Se consulta
-    /// al abrir el diálogo, no en el listado: cada llamada ejecuta comandos
-    /// dentro del contenedor.
-    fn container_export_info(&self, container: &str) -> Response {
+    /// Motor detectado y bases de datos con las que trabajan la exportación y la
+    /// importación. Se consulta al abrir cada diálogo, no en el listado: cada
+    /// llamada ejecuta comandos dentro del contenedor.
+    fn container_sql_info(&self, container: &str) -> Response {
         let engine = match self.exportable_database(container) {
             Ok(engine) => engine,
             Err(response) => return response,
@@ -1038,6 +1035,47 @@ impl App {
                 let _ = fs::remove_file(&destination);
                 json_error(502, &error)
             }
+        }
+    }
+
+    /// Restaura dentro del contenedor el `.sql` que subió el navegador.
+    ///
+    /// El archivo no viaja en el JSON ni en un formulario: llega como cuerpo
+    /// crudo y `http::read_request` lo escribe en un temporal según entra, así
+    /// que un volcado de cientos de megabytes nunca pasa por la memoria del
+    /// panel. De aquí va directo a la entrada estándar del cliente.
+    fn container_import(&self, container: &str, request: &Request) -> Response {
+        let Some(source) = request.upload.as_ref() else {
+            return json_error(400, "adjunta un archivo .sql");
+        };
+        let bytes = fs::metadata(source).map(|data| data.len()).unwrap_or(0);
+        if bytes == 0 {
+            return json_error(400, "el archivo está vacío");
+        }
+
+        let schema = request.query.get("schema").map_or("", String::as_str).trim();
+        if !valid_schema_name(schema) {
+            return json_error(400, "selecciona la base de datos de destino");
+        }
+
+        let engine = match self.exportable_database(container) {
+            Ok(engine) => engine,
+            Err(response) => return response,
+        };
+
+        match self.docker.database_restore(container, engine, schema, source) {
+            Ok(result) if result.success => Response::json(
+                200,
+                format!(
+                    "{{\"ok\":true,\"bytes\":{bytes},\"output\":{}}}",
+                    json_string(&console_output(&result))
+                ),
+            ),
+            Ok(result) => json_error(
+                502,
+                &format!("la importación falló: {}", console_output(&result)),
+            ),
+            Err(error) => json_error(502, &error),
         }
     }
 
@@ -2677,6 +2715,20 @@ fn path_segments(path: &str) -> Vec<&str> {
         .split('/')
         .filter(|segment| !segment.is_empty())
         .collect()
+}
+
+/// Salida legible de un comando: stdout y stderr juntos y recortados. La usan
+/// la consola y el error de una importación fallida, donde el motivo suele
+/// llegar por stderr mientras stdout va vacío.
+fn console_output(result: &CommandResult) -> String {
+    let mut output = result.stdout.clone();
+    if !result.stderr.trim().is_empty() {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str(&result.stderr);
+    }
+    truncate_text(output.trim_end(), 16_000)
 }
 
 fn bearer_token(request: &Request) -> Option<&str> {
