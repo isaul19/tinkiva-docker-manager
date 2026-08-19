@@ -1,6 +1,6 @@
 # Changelog
 
-## No publicado
+## 0.12.0 — 2026-08-19
 
 ### Editor de variables de entorno en filas
 
