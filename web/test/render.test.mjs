@@ -669,6 +669,34 @@ test('Amazon ECR aparece en integraciones y pide unas claves de solo lectura', a
   assert.ok(secret, 'el secret no debe escribirse en claro');
 });
 
+test('el editor de variables reparte el .env en filas de clave y valor', async () => {
+  const app = await mount({
+    token: 'x'.repeat(40),
+    hash: '#/resources',
+    api: {
+      '/api/projects/storagia-db/environment': {
+        environment: "MAIL_ENABLED=true\nSES_FROM_EMAIL=no-reply@tinkiva.com",
+        managed_keys: ['TDM_MEMORY_LIMIT'],
+      },
+    },
+  });
+  await app.click('button', 'Variables');
+
+  const values = (label) =>
+    [...app.document.querySelectorAll(`input[aria-label="${label}"]`)].map(
+      (node) => node.value || node.getAttribute('value') || '',
+    );
+
+  assert.deepEqual(values('Clave'), ['MAIL_ENABLED', 'SES_FROM_EMAIL'], 'una fila por variable');
+  assert.deepEqual(values('Valor'), ['true', 'no-reply@tinkiva.com']);
+
+  const text = app.currentText();
+  assert.match(text, /Añadir variable/);
+  assert.match(text, /Importar \.env/);
+  assert.match(text, /Editar como texto/);
+  assert.match(text, /TDM_MEMORY_LIMIT/, 'sigue avisando de las claves gestionadas');
+});
+
 let failures = 0;
 for (const [name, body] of tests) {
   try {

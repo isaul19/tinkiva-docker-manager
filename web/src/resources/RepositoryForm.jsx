@@ -5,7 +5,9 @@ import { useAsync } from '../lib/hooks.js';
 import { formatIsoRelative, toSlug } from '../lib/format.js';
 import { BrandIcon } from '../ui/BrandIcon.jsx';
 import { AsyncBlock, Button, EmptyState, Spinner } from '../ui/Primitives.jsx';
-import { Field, FormGrid, Input, MemoryUnlimited, Select, TextArea } from '../ui/Form.jsx';
+import { Field, FormGrid, Input, MemoryUnlimited, Select } from '../ui/Form.jsx';
+import { EnvEditor } from '../ui/EnvEditor.jsx';
+import { RESERVED_KEYS } from '../lib/env.js';
 import { useToast } from '../ui/Toast.jsx';
 
 export function RepositoryForm({ onCreated }) {
@@ -291,14 +293,12 @@ export function RepositoryForm({ onCreated }) {
           </span>
         </label>
 
-        <Field label="Variables de entorno" hint="Una por línea, CLAVE=valor." wide>
-          <TextArea
-            rows={4}
-            value={form.environment}
-            onInput={update('environment')}
-            placeholder={'NODE_ENV=production\nPORT=3000'}
-          />
-        </Field>
+        <EnvEditor
+          wide
+          value={form.environment}
+          onChange={(environment) => setForm((current) => ({ ...current, environment }))}
+          reserved={RESERVED_KEYS}
+        />
       </FormGrid>
 
       <p class="muted small">

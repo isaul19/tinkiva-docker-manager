@@ -179,7 +179,7 @@ El asistente permite crear rápidamente:
 
 | Motor      | Imagen predeterminada |
 | ---------- | --------------------- |
-| PostgreSQL | `postgres:17-alpine`  |
+| PostgreSQL | `postgres:18.6-trixie`|
 | MySQL      | `mysql:8.4`           |
 | MariaDB    | `mariadb:11.4`        |
 | MongoDB    | `mongo:8`             |

@@ -1806,3 +1806,22 @@ code {
 .environment-note { display:grid; gap:.35rem; padding:.75rem .85rem; border:1px solid var(--line-soft); border-radius:var(--radius-sm); background:rgba(255,255,255,.018); color:var(--faint); font-size:.74rem; line-height:1.45; }
 @media (max-width:640px) { .pagination { align-items:flex-start; flex-direction:column; } }
 @media (max-width:760px) { .command-cell { max-width:22ch; } }
+
+/* Editor de variables clave/valor */
+.env-editor { display:grid; gap:.5rem; min-width:0; }
+.env-head { display:flex; align-items:baseline; justify-content:space-between; gap:.8rem; }
+.env-count { color:var(--faint); font-size:.74rem; font-variant-numeric:tabular-nums; }
+.env-count.is-over { color:var(--danger); }
+.env-rows { display:grid; gap:.4rem; }
+.env-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) auto; align-items:center; gap:.4rem; }
+.env-row-head { padding:0 .1rem; color:var(--faint); font-size:.72rem; font-weight:620; letter-spacing:.02em; }
+.env-key, .env-value { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.8rem; }
+.env-row.is-invalid .env-key { border-color:var(--danger); }
+.env-error { grid-column:1 / -1; color:var(--danger); font-size:.74rem; }
+.env-remove { padding:.45rem; color:var(--faint); }
+.env-remove:hover { border-color:var(--danger); color:var(--danger); }
+.env-actions { position:relative; display:flex; flex-wrap:wrap; gap:.45rem; }
+/* El input de archivo se dispara desde «Importar .env»; `display:none` lo
+   dejaría fuera del árbol accesible, así que se oculta sin sacarlo. */
+.env-file { position:absolute; width:1px; height:1px; padding:0; border:0; opacity:0; pointer-events:none; }
+@media (max-width:640px) { .env-row { grid-template-columns:minmax(0,1fr) auto; } .env-row .env-value { grid-column:1 / -1; } .env-row-head span:nth-child(2) { display:none; } }

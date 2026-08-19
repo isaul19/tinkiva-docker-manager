@@ -7,6 +7,7 @@ import { formatRelative } from "../lib/format.js";
 import { BrandIcon, hasBrand } from "../ui/BrandIcon.jsx";
 import { AsyncBlock, Badge, Button, EmptyState, Pagination, Panel } from "../ui/Primitives.jsx";
 import { CopyValue, Field, FormGrid, Input, Select, TextArea } from "../ui/Form.jsx";
+import { EnvEditor } from "../ui/EnvEditor.jsx";
 import { Modal } from "../ui/Modal.jsx";
 import { useToast } from "../ui/Toast.jsx";
 import { LogsDialog } from "./LogsDialog.jsx";
@@ -382,6 +383,9 @@ function DeployDialog({ project, busy, onClose, onSubmit }) {
 
 function EnvironmentDialog({ state, busy, onClose, onSubmit }) {
   const [environment, setEnvironment] = useState(state?.environment || "");
+  // El dialogo sigue montado al cerrarse; sin este reset, abrir las variables
+  // de otro recurso mostraria el .env del anterior.
+  useEffect(() => { setEnvironment(state?.environment || ""); }, [state]);
   if (!state) return null;
   const { project, managedKeys = [] } = state;
   return <Modal open onClose={onClose} eyebrow="CONFIGURACION" title={`Variables de ${project.name}`} description="Edita el archivo .env del recurso. Al guardar, Docker recreara el servicio solo si la configuracion cambio." footer={<>
@@ -389,9 +393,13 @@ function EnvironmentDialog({ state, busy, onClose, onSubmit }) {
     <Button variant="primary" loading={busy} onClick={() => onSubmit(project, environment)}>Guardar y aplicar</Button>
   </>}>
     <FormGrid columns={1}>
-      <Field label="Variables de entorno" hint="Una por linea, CLAVE=valor. Para borrar una variable, elimina su linea." wide>
-        <TextArea rows={10} spellcheck={false} placeholder={'NODE_ENV=production\nPORT=3000'} value={environment} onInput={(event) => setEnvironment(event.currentTarget.value)} />
-      </Field>
+      <EnvEditor
+        value={environment}
+        onChange={setEnvironment}
+        reserved={managedKeys}
+        hint="Para borrar una variable, usa la papelera de su fila."
+        wide
+      />
       <div class="environment-note">
         <span>El archivo se mantiene con permisos 0600 y los valores no se escriben en el historial.</span>
         {managedKeys.length ? <span>Gestionadas por Tinkiva y ocultas aqui: <code>{managedKeys.join(", ")}</code>.</span> : null}

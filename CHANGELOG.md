@@ -1,5 +1,42 @@
 # Changelog
 
+## No publicado
+
+### Editor de variables de entorno en filas
+
+- Las variables se editan en **filas clave/valor**, tanto en el diálogo «Variables» de un
+  recurso como en los formularios de «Imagen de Amazon ECR» y de repositorio: añadir una fila,
+  borrarla con su papelera, **importar un `.env`** desde el disco y ocultar los valores para no
+  enseñarlos al compartir pantalla. «Editar como texto» sigue ofreciendo el bloque completo de
+  siempre para quien prefiera pegar y listo.
+- **Pegar un `.env` entero en cualquier campo «Clave» lo reparte en filas**, y pegar
+  `CLAVE=valor` rellena las dos columnas de golpe. En el campo «Valor» solo se reparte un
+  bloque de varias líneas en el que *todas* son asignaciones: un ARN de KMS, un token o un
+  base64 llevan `=` dentro y tienen que pegarse tal cual.
+- Si el bloque pegado repite una clave que ya estaba, se actualiza esa fila en su sitio en vez
+  de dejar un duplicado que el servidor rechazaría al guardar. Al importar, igual.
+- El editor valida en el navegador **las mismas reglas que aplica el binario**: claves en
+  mayúsculas sin empezar por dígito, sin repetir, sin usar las que gestiona el panel
+  (`APP_IMAGE`, `TDM_MEMORY_LIMIT`) y valores de hasta 4096 caracteres, con el contador de 100
+  variables a la vista. Los errores se marcan en la fila antes de llegar al servidor.
+- El formato guardado no cambia: el `.env` se sigue escribiendo `CLAVE=valor` por línea, con
+  sus permisos 0600 y sin pasar por el historial.
+
+### Cambios
+
+- La plantilla de PostgreSQL pasa de `postgres:17-alpine` a **`postgres:18.6-trixie`**. La
+  imagen 18 mueve los datos a `/var/lib/postgresql/18/docker` y declara el volumen en
+  `/var/lib/postgresql`, así que el Compose generado monta el volumen ahí; con la ruta antigua
+  los datos habrían acabado en la capa efímera del contenedor. Solo afecta a recursos nuevos:
+  los ya creados conservan su `compose.yaml` y su versión, porque PostgreSQL 18 no arranca
+  sobre un directorio de datos de la 17 sin `pg_upgrade`.
+
+### Correcciones
+
+- El diálogo «Variables» arrastraba el `.env` del recurso anterior: sigue montado al cerrarse y
+  no reseteaba su estado, así que abrir las variables de otro recurso mostraba las del último
+  consultado, con el riesgo de guardarlas donde no eran.
+
 ## 0.11.0 — 2026-08-16
 
 ### Nuevas funcionalidades

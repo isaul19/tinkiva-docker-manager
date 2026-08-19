@@ -31,7 +31,7 @@ pub const ENGINES: [DatabaseEngine; 5] = [
     DatabaseEngine {
         id: "postgres",
         label: "PostgreSQL",
-        image: "postgres:17-alpine",
+        image: "postgres:18.6-trixie",
         service: "postgres",
         port: 5432,
         scheme: "postgresql",
@@ -195,7 +195,7 @@ pub fn database(request: &DatabaseRequest) -> GeneratedResource {
             ),
             "",
             "[\"CMD-SHELL\", \"pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB\"]",
-            "/var/lib/postgresql/data",
+            "/var/lib/postgresql",
             "    shm_size: 128m\n",
         ),
         "mysql" => (

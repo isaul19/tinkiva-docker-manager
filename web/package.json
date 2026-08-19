@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",
-    "test": "node build.mjs && node test/render.test.mjs"
+    "test": "node build.mjs && node test/env.test.mjs && node test/render.test.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
