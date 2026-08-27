@@ -1,1031 +1,138 @@
-# Tinkiva Docker Manager
+# Tinkiva Docker Manager — TinkivaCreateApp Monitor
 
-### Un panel Docker ultraligero para servidores pequeños.
+Edición estable y de solo lectura para observar las aplicaciones que TinkivaCreateApp u otro
+sistema despliega en un servidor Docker.
 
-**Un único binario Rust. Sin Node.js en producción. Sin Redis ni PostgreSQL para el panel. SQLite
-va embebido en el propio binario. Sin agentes adicionales.**
+Esta línea no incluye CI/CD. No clona repositorios, no descarga imágenes, no ejecuta Compose,
+no recibe webhooks y no puede arrancar, detener, reiniciar ni borrar contenedores. Su trabajo es
+mostrar qué está ocurriendo en el host.
 
-> **≈ 0.7–1.2 MB de memoria privada del proceso**
->
-> Diseñado para administrar aplicaciones Docker sin que el propio panel termine consumiendo los
-> recursos del servidor.
+## Qué muestra
 
-![Dashboard de Tinkiva Docker Manager](https://i.postimg.cc/4dhZm9nc/image.png)
+- CPU, RAM, swap, disco, carga y uptime del servidor.
+- Contenedores Docker activos y detenidos.
+- Imagen, estado, puertos, CPU, memoria, red, disco y procesos de cada contenedor.
+- Logs recientes con actualización manual o seguimiento cada cuatro segundos.
+- Estado del acceso al daemon Docker y consumo de memoria del propio panel.
 
-![Vista de Recursos](https://i.postimg.cc/MG6vMd81/image.png)
+Los contenedores aparecen automáticamente. TinkivaCreateApp no necesita registrar proyectos en
+el panel: basta con desplegarlos en el mismo daemon Docker.
 
-![Vista de Contenedores](https://i.postimg.cc/X75xNcWD/image.png)
+## Líneas de producto
 
-![Vista de despliegues](https://i.postimg.cc/k4ZFqDhk/image.png)
+| Línea | Tags | Propósito |
+|---|---|---|
+| Manager clásico | `v0.14.x` | Despliegue sencillo por SSH y administración de apps |
+| Panel preview | `v0.15.0-panel.x` | Panel general con persistencia SQLite |
+| TinkivaCreateApp | `createapp-v0.15.x` | Observabilidad estable, externa y de solo lectura |
 
----
+`tmanager update` en esta edición solo busca tags `createapp-v*`; nunca cambia a la edición clásica ni al panel preview.
 
-## ¿Qué es Tinkiva Docker Manager?
+## Requisitos
 
-Tinkiva Docker Manager es un panel web **self-hosted y de un solo nodo** para desplegar, administrar
-y monitorear aplicaciones Docker.
+- Linux x86_64 o ARM64.
+- Docker Engine accesible para el usuario del servicio.
+- `df`, usado para medir el disco raíz.
+- `curl` y `sha256sum`, únicamente para `tmanager update`.
 
-Está pensado especialmente para:
+Docker Compose, Git, GitHub y credenciales de registros no son necesarios.
 
-- VPS pequeños.
-- EC2 de bajo costo.
-- Servidores ARM / Graviton.
-- Homelabs.
-- Proyectos personales.
-- Startups y aplicaciones pequeñas.
-- Servidores donde cada MB de RAM importa.
+## Instalación
 
-El objetivo no es convertirse en otra plataforma PaaS enorme.
-
-La filosofía es más simple:
-
-> **Docker ya hace casi todo el trabajo. Tinkiva solo debe ayudarte a controlarlo.**
-
-Por eso el panel evita mantener servicios adicionales residentes y delega las operaciones pesadas a
-las herramientas que normalmente ya existen en el servidor.
-
----
-
-# Ultraligero por diseño
-
-Tinkiva Docker Manager está escrito en **Rust** y funciona como un único proceso.
-
-No necesita mantener permanentemente:
-
-- Node.js
-- PostgreSQL
-- MySQL
-- Redis
-- Prometheus
-- Grafana
-- cAdvisor
-- Docker-in-Docker
-- un runtime asíncrono pesado
-- agentes de monitoreo adicionales
-
-La interfaz web está compilada y **embebida directamente dentro del binario**.
-
-### Consumo de memoria
-
-En reposo, el proceso utiliza aproximadamente:
-
-| Métrica                |          Consumo |
-| ---------------------- | ---------------: |
-| Memoria privada típica | **≈ 0.7–1.2 MB** |
-| RSS observado en Linux |         ≈ 2–3 MB |
-| Binario release        |         ≈ 2.1 MB |
-| Frontend compilado     |         ≈ 155 KB |
-| Frontend gzip          |          ≈ 53 KB |
-
-La diferencia entre memoria privada y RSS se debe principalmente a páginas compartidas con el
-sistema, como `libc` y el loader de Linux.
-
-Esto significa que **la memoria realmente exclusiva del panel puede mantenerse por debajo de 1 MB en
-condiciones normales**.
-
-Puedes medirlo directamente en tu servidor:
+Descarga el binario correspondiente desde la release `createapp-v0.15.0`:
 
 ```bash
-sudo ./scripts/measure-memory.sh
+chmod +x tinkiva-docker-manager-linux-amd64
+sudo ./scripts/install.sh ./tinkiva-docker-manager-linux-amd64
 ```
 
-También puedes consultar el RSS desde la sección **Sistema → Panel Rust**.
+El instalador crea el usuario `tinkiva-docker`, le concede acceso al grupo `docker`, instala el
+servicio systemd y genera las credenciales iniciales.
 
-> Docker Engine y los contenedores administrados no forman parte de estas cifras.
-
----
-
-# ¿Por qué existe?
-
-Hay excelentes plataformas como Coolify, Dokploy y Portainer.
-
-Tinkiva Docker Manager no intenta reemplazarlas.
-
-Está pensado para un escenario diferente:
-
-**quiero administrar Docker desde una interfaz sencilla, pero no quiero dedicar cientos de megabytes
-de RAM solamente al panel de administración.**
-
-Tinkiva prioriza:
-
-- bajo consumo
-- simplicidad
-- un solo servidor
-- pocas dependencias
-- despliegues reproducibles
-- seguridad por defecto
-- mantenimiento sencillo
-
-A cambio, deliberadamente evita características empresariales que aumentarían considerablemente su
-complejidad.
-
----
-
-# Características
-
-## Docker
-
-Desde el panel puedes:
-
-- visualizar contenedores
-- consultar CPU y RAM
-- ver logs
-- iniciar contenedores
-- detener contenedores
-- reiniciar contenedores
-- consultar procesos del servidor
-- consultar disco, swap, carga y uptime
-- ver las imágenes locales con su peso y borrar las que no usa ningún contenedor
-- descargar imágenes privadas de Amazon ECR con un access key de solo lectura
-- exportar bases de datos PostgreSQL, MySQL y MariaDB a `.sql`
-- importar un `.sql` en esas mismas bases desde el propio panel
-
-Tinkiva utiliza directamente el Docker CLI instalado en el servidor.
-
-No mantiene otro Docker daemon ni un cliente pesado residente.
-
----
-
-## Despliegues
-
-Puedes registrar y desplegar aplicaciones mediante:
-
-### Repositorio de GitHub
-
-Conecta una GitHub App y selecciona:
-
-1. repositorio
-2. rama
-3. configuración del proyecto
-4. estrategia de despliegue
-
-Tinkiva puede detectar cambios y redesplegar automáticamente.
-
-### Docker Compose
-
-Si ya tienes una aplicación funcionando mediante Compose, puedes registrarla sin modificar su
-estructura. También es la vía para levantar una imagen suelta de cualquier registro —Docker Hub,
-GHCR o uno privado—: pegas su Compose y el panel lo guarda como recurso editable.
-
-```yaml
-services:
-  api:
-    image: ghcr.io/usuario/api:sha-a48da8f
-```
-
-### Bases de datos
-
-El asistente permite crear rápidamente:
-
-| Motor      | Imagen predeterminada |
-| ---------- | --------------------- |
-| PostgreSQL | `postgres:18.6-trixie`|
-| MySQL      | `mysql:8.4`           |
-| MariaDB    | `mariadb:11.4`        |
-| MongoDB    | `mongo:8`             |
-| Redis      | `redis:7-alpine`      |
-
-Cada recurso incluye automáticamente:
-
-- volumen persistente
-- healthcheck
-- `restart: unless-stopped`
-- límite de RAM configurable, con opción de no imponer ninguno
-- `no-new-privileges`
-- red Docker privada
-- contraseña generada
-- cadena de conexión
-
-Los puertos de las bases de datos **no se publican al exterior por defecto**.
-
----
-
-# GitHub Auto Deploy
-
-Tinkiva incluye integración mediante **GitHub App**.
-
-El flujo puede funcionar completamente mediante conexiones salientes:
-
-```text
-GitHub
-   │
-   │ HTTPS
-   ▼
-Tinkiva watcher
-   │
-   ├── detecta nuevo commit
-   ├── actualiza repositorio
-   ├── build
-   ├── docker compose up
-   └── registra resultado
-```
-
-Esto significa que **no necesitas publicar el puerto 8787 en Internet para recibir cambios desde
-GitHub**.
-
-También puedes usar:
-
-- polling
-- webhook propio
-- GitHub Actions
-- deploy manual
-
----
-
-# GitHub Actions
-
-Para servidores pequeños suele ser mejor construir la imagen en GitHub Actions y dejar que el
-servidor solamente haga:
-
-```text
-pull → compose up
-```
-
-Flujo recomendado:
-
-```text
-git push
-    │
-    ▼
-GitHub Actions
-    │
-    ├── build
-    ├── Docker image
-    └── GHCR
-          │
-          ▼
-Tinkiva Docker Manager
-          │
-          ├── pull
-          └── docker compose up
-```
-
-Esto evita consumir CPU y RAM del servidor durante la compilación.
-
-Para ARM / AWS Graviton:
-
-```yaml
-platforms: linux/arm64
-```
-
-Para servidores x86:
-
-```yaml
-platforms: linux/amd64
-```
-
----
-
-# Deploy seguro y rollback
-
-Cada despliegue exitoso conserva información sobre:
-
-- imagen nueva
-- imagen anterior
-- commit
-- rama
-- fecha
-- duración
-- origen
-- resultado
-
-Si un despliegue falla:
-
-1. Tinkiva detecta el error.
-2. Restaura el `.env`.
-3. Recupera la imagen anterior.
-4. Ejecuta nuevamente Docker Compose.
-5. Registra el fallo en el historial.
-
-Para obtener rollbacks reproducibles se recomienda utilizar imágenes inmutables:
-
-```text
-ghcr.io/usuario/api:sha-2df418c
-```
-
-en lugar de:
-
-```text
-latest
-```
-
----
-
-# Arquitectura
-
-La arquitectura es intencionalmente pequeña:
-
-```text
-┌──────────────────────────────┐
-│       Navegador Web          │
-└──────────────┬───────────────┘
-               │
-               │ HTTP
-               ▼
-┌──────────────────────────────┐
-│  Tinkiva Docker Manager      │
-│                              │
-│  Rust                        │
-│  API                         │
-│  Web UI                      │
-│  Métricas                    │
-│  Estado                      │
-│  GitHub watcher              │
-│                              │
-│        UN PROCESO            │
-└───────┬──────────┬───────────┘
-        │          │
-        ▼          ▼
-     Docker       Git
-        │
-        ▼
- Docker Compose
-```
-
-Las herramientas externas se ejecutan únicamente cuando son necesarias.
-
-| Herramienta | Uso                    |
-| ----------- | ---------------------- |
-| `docker`    | contenedores y Compose |
-| `git`       | repositorios           |
-| `curl`      | GitHub y registries    |
-| `openssl`   | JWT de GitHub App      |
-| `df`        | métricas de disco      |
-
-No permanecen residentes después de terminar la operación.
-
----
-
-# Estado local en SQLite
-
-Tinkiva no necesita un servidor de base de datos externo para almacenar su propio estado.
-SQLite está compilado dentro del binario y guarda proyectos e historial en:
-
-```env
-TDM_STORE=sqlite
-TDM_SQLITE_PATH=/var/lib/tinkiva-docker-manager/tinkiva.sqlite3
-```
-
-La base usa transacciones, journal WAL, sincronización completa y permisos `0600`. El historial
-tiene un tamaño máximo configurable para evitar crecimiento indefinido:
-
-```env
-TDM_MAX_HISTORY=200
-```
-
-Las versiones anteriores usaban un archivo de texto `state.db` con formato TDM3. `v0.15.0` no
-lo importa automáticamente: se conserva intacto y la base SQLite se crea en una ruta distinta.
-
----
-
-# Seguridad por defecto
-
-El panel escucha por defecto únicamente en:
-
-```text
-127.0.0.1:8787
-```
-
-Por lo tanto no queda expuesto públicamente después de instalarlo.
-
-## Acceso por túnel SSH
-
-**El panel no se abre a Internet: se accede a través de un túnel SSH.** El puerto 8787 nunca se
-publica en el firewall ni en el Security Group, así que la única puerta de entrada al panel es la
-misma con la que ya administras el servidor, con su llave y su control de acceso.
-
-Desde tu PC:
+Acceso recomendado mediante túnel SSH:
 
 ```bash
-ssh -i ".\tinkiva-server-1.pem" -L 8787:127.0.0.1:8787 ec2-user@44.211.221.87
+ssh -L 8787:127.0.0.1:8787 usuario@servidor
 ```
 
-Con la sesión SSH abierta, en tu navegador:
+Después abre `http://127.0.0.1:8787`.
+
+## Configuración
+
+La instalación del sistema guarda `/etc/tinkiva-docker-manager/env` con permisos `0600`:
+
+```dotenv
+TDM_EDITION=createapp
+TDM_BIND=127.0.0.1:8787
+TDM_ADMIN_TOKEN=un-token-aleatorio-de-al-menos-32-caracteres
+TDM_ADMIN_USER=admin
+TDM_ADMIN_PASSWORD=contraseña-inicial
+TDM_DATA_DIR=/var/lib/tinkiva-docker-manager
+TDM_DOCKER_BIN=/usr/bin/docker
+TDM_WORKERS=2
+```
+
+El primer acceso obliga a cambiar la contraseña. El token administrador sigue disponible para
+consultas automatizadas de la API.
+
+## API de solo lectura
+
+Salvo `/healthz` y el inicio de sesión, los endpoints requieren `Authorization: Bearer TOKEN`.
 
 ```text
-http://127.0.0.1:8787
+GET  /healthz
+POST /api/auth/login
+POST /api/auth/change-password
+GET  /api/info
+GET  /api/system
+GET  /api/containers
+GET  /api/containers/:nombre/logs?tail=300
 ```
 
-El `-L 8787:127.0.0.1:8787` reenvía tu puerto local 8787 al `127.0.0.1:8787` **del servidor**, que
-es justo donde escucha el panel. Mientras el túnel esté levantado el panel se comporta como si
-corriera en tu máquina; al cerrar la sesión SSH desaparece el acceso.
+No existen endpoints de despliegue ni endpoints de escritura sobre Docker.
 
-En Linux o macOS la llave debe tener permisos restringidos o SSH la rechaza:
-
-```bash
-chmod 600 tinkiva-server-1.pem
-ssh -i ./tinkiva-server-1.pem -L 8787:127.0.0.1:8787 ec2-user@44.211.221.87
-```
-
-Si el 8787 local ya está ocupado, usa otro puerto de tu lado y abre ese en el navegador:
-
-```bash
-ssh -i ".\tinkiva-server-1.pem" -L 9090:127.0.0.1:8787 ec2-user@44.211.221.87
-```
-
-La autenticación utiliza un token administrador.
-
-El token del navegador se almacena en:
-
-```text
-sessionStorage
-```
-
-y desaparece al cerrar la pestaña.
-
----
-
-## Importante sobre Docker
-
-El servicio necesita acceso al Docker daemon.
-
-En Linux, un usuario con permisos sobre Docker tiene prácticamente privilegios equivalentes a
-`root`.
-
-Por ello Tinkiva está pensado para:
-
-- servidores propios
-- administradores de confianza
-- instalaciones single-tenant
-
-No está diseñado como plataforma multiusuario hostil o multi-tenant.
-
-Consulta:
-
-- [SECURITY.md](./SECURITY.md)
-- [Arquitectura interna](./docs/ARCHITECTURE.md)
-
----
-
-# Instalación
-
-## Opción recomendada — binario precompilado
-
-Los releases incluyen binarios Linux para:
-
-```text
-x86_64 / amd64
-aarch64 / arm64
-```
-
-Detecta automáticamente tu arquitectura:
-
-```bash
-ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
-```
-
-Descarga:
-
-```bash
-curl --fail --location -O \
-"https://github.com/isaul19/tinkiva-docker-manager/releases/latest/download/tinkiva-docker-manager-linux-${ARCH}"
-
-curl --fail --location -O \
-"https://github.com/isaul19/tinkiva-docker-manager/releases/latest/download/tinkiva-docker-manager-linux-${ARCH}.sha256"
-```
-
-Verifica:
-
-```bash
-sha256sum -c "tinkiva-docker-manager-linux-${ARCH}.sha256"
-```
-
-Instala:
-
-```bash
-sudo install -m 0755 \
-"tinkiva-docker-manager-linux-${ARCH}" \
-/usr/local/bin/tmanager
-```
-
-Inicia:
+## Operación
 
 ```bash
 tmanager start
+tmanager stop
+tmanager status
+tmanager logs 100
+tmanager logs -f
+tmanager config
+tmanager update
+tmanager uninstall
 ```
 
-En el primer inicio aparecerá el asistente de configuración.
-
-El asistente crea un usuario inicial (`admin`, salvo que se configure otro) y una contraseña
-aleatoria. El primer inicio de sesión obliga a sustituirla. En instalaciones automatizadas se
-pueden definir antes de arrancar el servicio:
-
-```env
-TDM_ADMIN_USER=admin
-TDM_ADMIN_PASSWORD=una-contraseña-inicial-de-al-menos-12-caracteres
-```
-
-La contraseña inicial solo se usa para crear `<TDM_DATA_DIR>/auth.conf`; ese archivo guarda un
-hash Argon2, nunca la contraseña. Un error de usuario o contraseña bloquea nuevos intentos desde
-la misma IP durante un minuto. Tres errores consecutivos amplían el bloqueo a un día. Para
-publicar el panel bajo `/plataform/`, usa el ejemplo de Nginx incluido en
-`deploy/nginx.example.conf` y sirve siempre mediante HTTPS.
-
----
-
-# CLI
-
-Sin argumentos abre el menú interactivo:
+Para actualizar a una versión específica de esta misma edición:
 
 ```bash
-tmanager
+tmanager update createapp-v0.15.1
 ```
 
-| Comando                  | Qué hace                                                                                                         |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `tmanager start`         | Arranca el panel en segundo plano. En el primer inicio lanza el asistente de configuración.                      |
-| `tmanager stop`          | Detiene la instancia en segundo plano (SIGTERM; fuerza `-9` si no baja).                                         |
-| `tmanager status`        | Indica si está en ejecución, con el pid y la URL del panel.                                                      |
-| `tmanager logs`          | Últimas 50 líneas del log.                                                                                       |
-| `tmanager logs 200`      | Últimas N líneas.                                                                                                |
-| `tmanager logs -f`       | Sigue el log en vivo.                                                                                            |
-| `tmanager config`        | Reejecuta el asistente; tus valores actuales se ofrecen como default.                                            |
-| `tmanager token`         | Imprime el token administrador, solo el token, apto para tuberías.                                               |
-| `tmanager update`        | Descarga la última release de GitHub, verifica el sha256 y se reemplaza.                                         |
-| `tmanager update v0.9.1` | Instala una versión concreta.                                                                                    |
-| `tmanager uninstall`     | Detiene el panel y elimina la instalación. `--purge` borra además config y datos; `--yes` omite la confirmación. |
-| `tmanager version`       | Imprime la versión actual.                                                                                       |
-| `tmanager help`          | Lista los comandos disponibles.                                                                                  |
-
-`token` combina bien con la API:
-
-```bash
-curl -H "Authorization: Bearer $(tmanager token)" http://127.0.0.1:8787/api/info
-```
-
----
-
-# Compilar desde el código
-
-Requisitos:
-
-- Linux
-- Rust 1.85+
-- Docker
-- Docker Compose v2
-
-Clona el proyecto:
-
-```bash
-git clone https://github.com/isaul19/tinkiva-docker-manager.git
-cd tinkiva-docker-manager
-```
-
-Compila:
-
-```bash
-./scripts/build-release.sh
-```
-
-El perfil release está optimizado específicamente para reducir tamaño:
-
-```toml
-opt-level = "z"
-lto = "fat"
-codegen-units = 1
-panic = "abort"
-strip = "symbols"
-```
-
-Además, el proyecto Rust no utiliza crates externos.
-
-```toml
-[dependencies]
-```
-
-Intencionalmente vacío.
-
----
-
-# Frontend
-
-La interfaz utiliza:
-
-```text
-Preact
-+
-esbuild
-```
-
-pero **Node.js no es necesario en producción**.
-
-Node solamente se utiliza para compilar el frontend durante desarrollo.
-
-El resultado queda incluido dentro del binario Rust.
-
-Para modificar la interfaz:
+## Desarrollo y validación
 
 ```bash
 cd web
-npm install
-npm run build
-```
-
-Modo watch:
-
-```bash
-npm run watch
-```
-
----
-
-# Desarrollo en Windows
-
-El panel es **solo Linux**: usa `std::os::unix` para permisos, señales y `/proc`, así que no compila
-en Windows nativo. Se desarrolla dentro de WSL2, que además da el mismo Linux que corre en el
-servidor.
-
-### 1. WSL2 y Ubuntu
-
-En PowerShell **como administrador**:
-
-```powershell
-wsl --install -d Ubuntu
-```
-
-Reinicia, abre Ubuntu y crea tu usuario. Comprueba que es WSL2:
-
-```powershell
-wsl -l -v
-```
-
-La columna `VERSION` debe decir `2`.
-
-### 2. Docker Desktop
-
-Instala Docker Desktop y activa la integración con la distro:
-
-```text
-Settings → Resources → WSL integration → Ubuntu
-```
-
-Desde Ubuntu, esto tiene que responder sin `sudo`:
-
-```bash
-docker ps
-docker compose version
-```
-
-Sin eso el panel arranca, pero avisa de que Docker no está accesible y casi nada funciona.
-
-### 3. Rust y Node
-
-Dentro de Ubuntu:
-
-```bash
-sudo apt update && sudo apt install -y build-essential curl git
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
-```
-
-`build-essential` no es opcional: `cargo` necesita `cc` para enlazar. La versión de Rust la fija
-`rust-toolchain.toml`, así que rustup la descarga sola la primera vez.
-
-Node 20+ solo hace falta si vas a tocar `web/`. El `nodejs` de los repos de Ubuntu suele ir por
-detrás, así que mejor con nvm:
-
-```bash
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-source "$HOME/.nvm/nvm.sh"
-nvm install 20
-cd web && npm install
-```
-
-### 4. Dónde clonar
-
-Puedes trabajar sobre el repositorio de Windows en `/mnt/c/...`, que es lo cómodo si editas con VS
-Code desde Windows. A cambio, el sistema de archivos cruzado es lento: si notas que `cargo build` se
-arrastra, clona dentro de la distro (`~/tinkiva-docker-manager`) y usa la extensión **WSL** de VS
-Code.
-
-### 5. Para ver los cambios
-
-Solo si tocaste el frontend:
-
-```bash
-cd web && npm run build && cd ..
-```
-
-Después, siempre:
-
-```bash
-cargo build --release
-sudo cp target/release/tmanager /usr/local/bin/tmanager
-tmanager stop;
-tmanager start
-```
-
-El bundle de `web/dist` se incrusta con `include_str!`, así que `cargo build` lo recompila solo
-cuando el archivo cambió. Abre `http://127.0.0.1:8787` en el navegador de Windows: WSL2 reenvía
-`localhost`, aquí no hace falta túnel.
-
-El token de acceso:
-
-```bash
-tmanager token
-```
-
-### 6. Pruebas
-
-```bash
-cargo test
-cd web && npm test && cd ..
-./scripts/smoke-test.sh
-```
-
-Si el repositorio vive en `/mnt/c` con `core.autocrlf` activado, los `.sh` llegan con terminaciones
-CRLF y bash falla con `bad interpreter`. Cópialos y límpialos antes:
-
-```bash
-cp -r scripts tests /tmp/tdm-smoke/
-sed -i 's/\r$//' /tmp/tdm-smoke/{scripts,tests}/*.sh
-```
-
-### 7. Desde Windows, sin entrar a WSL
-
-Para una comprobación rápida de tipos desde PowerShell, sin compilar de verdad:
-
-```powershell
-rustup target add x86_64-unknown-linux-gnu
-cargo check --target x86_64-unknown-linux-gnu
-```
-
-Sirve para ver errores del compilador mientras editas. Para ejecutar, siempre WSL.
-
----
-
-# Requisitos
-
-### Producción
-
-Necesario:
-
-- Linux
-- Docker Engine
-- Docker Compose v2
-
-Opcional según funcionalidades:
-
-- `git`
-- `curl`
-- `openssl`
-
-### Desarrollo
-
-- Rust 1.85+
-- Node.js 20+ para modificar el frontend
-- En Windows, WSL2 con Ubuntu — el binario no compila fuera de Linux
-
----
-
-# Métricas
-
-Sin instalar Prometheus, Grafana ni agentes adicionales, Tinkiva muestra:
-
-### Servidor
-
-- CPU
-- RAM
-- swap
-- disco
-- load average
-- uptime
-
-### Procesos
-
-- PID
-- CPU
-- RAM
-- RSS
-
-### Docker
-
-- contenedores
-- estado
-- CPU
-- RAM
-
-Los datos se obtienen directamente desde Linux:
-
-```text
-/proc/stat
-/proc/meminfo
-/proc/loadavg
-/proc/uptime
-/proc/self/status
-```
-
-y desde:
-
-```bash
-docker ps
-docker stats --no-stream
-df
-```
-
-No se almacena una serie histórica de métricas.
-
----
-
-# Lo que Tinkiva deliberadamente NO intenta hacer
-
-Para mantener el proyecto pequeño no incluye:
-
-- Kubernetes
-- Docker Swarm
-- clusters
-- múltiples servidores
-- RBAC complejo
-- múltiples organizaciones
-- PostgreSQL para el panel
-- Redis para el panel
-- Prometheus
-- Grafana
-- cAdvisor
-- gestión automática de DNS
-- gestión completa de certificados TLS
-- terminal web genérica
-- gestor de secretos empresarial
-
-Si necesitas todas esas características, probablemente una plataforma PaaS completa sea una mejor
-opción.
-
-Si solo quieres **administrar y desplegar Docker sin desperdiciar recursos**, Tinkiva puede ser
-suficiente.
-
----
-
-# Validación
-
-La versión actual se valida mediante:
-
-```bash
+npm ci
+npm test
+
+cd ..
+cargo fmt --check
 cargo clippy --all-targets
 cargo test
 cargo build --release
+./scripts/smoke-test.sh target/release/tmanager
 ```
 
-y pruebas completas del frontend y de la API.
+El backend solo soporta Linux porque lee `/proc`, ejecuta `df` y consulta Docker.
 
-Entre las pruebas se cubren:
+## Seguridad
 
-- autenticación
-- Docker
-- logs
-- deploy
-- rollback
-- historial
-- GitHub
-- webhooks
-- rutas seguras
-- bases de datos
-- recursos
-- SHA-256
-- HMAC-SHA256
-- JSON
-- protección contra escapes de rutas
-- timeouts
-- manejo de credenciales
+Aunque la aplicación solo ejecuta comandos Docker de lectura, pertenecer al grupo `docker`
+equivale técnicamente a tener privilegios elevados sobre el host. Mantén el panel ligado a
+localhost o detrás de HTTPS y autenticación adicional. Consulta [SECURITY.md](SECURITY.md).
 
-Consulta los resultados completos:
+## Licencia
 
-[VALIDATION.md](./VALIDATION.md)
-
----
-
-# Estructura
-
-```text
-src/
-├── main.rs
-├── app.rs
-├── http.rs
-├── model.rs
-├── store.rs
-├── docker.rs
-├── git.rs
-├── github.rs
-├── registry.rs
-├── templates.rs
-├── metrics.rs
-├── crypto.rs
-├── net.rs
-├── proc.rs
-├── setup.rs
-└── daemon.rs
-
-web/
-├── src/
-├── dist/
-└── build.mjs
-
-deploy/
-examples/
-scripts/
-tests/
-docs/
-```
-
-Más información:
-
-[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
-
----
-
-# Filosofía
-
-Tinkiva Docker Manager parte de una idea sencilla:
-
-> **El panel que administra tus aplicaciones no debería consumir más recursos que muchas de las
-> aplicaciones que administra.**
-
-Por eso cada decisión intenta favorecer:
-
-```text
-menos procesos
-menos dependencias
-menos RAM
-menos superficie de ataque
-menos mantenimiento
-```
-
-sin renunciar a las funciones esenciales de despliegue Docker.
-
----
-
-# Estado del proyecto
-
-Tinkiva Docker Manager está en desarrollo activo.
-
-El alcance actual está deliberadamente centrado en:
-
-```text
-1 servidor
-1 administrador
-Docker
-Docker Compose
-GitHub
-deploy
-rollback
-monitoreo básico
-```
-
-Antes de utilizarlo con cargas críticas se recomienda probar:
-
-- deploy
-- rollback
-- reinicio del servidor
-- recuperación
-- backups de las bases de datos
-- backups de volúmenes
-
-en un entorno de staging.
-
----
-
-# Documentación
-
-- [Arquitectura](./docs/ARCHITECTURE.md)
-- [Validación y benchmarks](./VALIDATION.md)
-- [Seguridad](./SECURITY.md)
-- [Changelog](./CHANGELOG.md)
-
----
-
-# Licencia
-
-MIT License.
-
-Consulta [LICENSE](./LICENSE).
-
----
-
-# Contributors y asistentes de desarrollo
-
-Parte del desarrollo de este proyecto fue asistida por agentes de IA bajo dirección y revisión
-humana:
-
-- **GLM 5.3**: trabajé en la seguridad del panel: generación del token administrador con 192 bits de
-  entropía desde `/dev/urandom`, guardado con permisos `0600`, comparación en tiempo constante y
-  corrección del bug que impedía mostrar el token regenerado. En general recomiendo acceder mediante
-  túneles SSH en lugar de exponer puertos directamente, para mantener el endpoint privado y reducir
-  la superficie de ataque.
-- **Claude Opus 5**: trabajé sobre todo en la interfaz y la experiencia de uso — que las vistas se
-  lean de un vistazo, que los diálogos guíen en lugar de interrogar y que la aplicación siga
-  hablando un solo idioma. La restricción más interesante fue que nada de eso podía costar peso: la
-  interfaz entera sigue siendo un puñado de kilobytes que viajan dentro del binario. También
-  implementé la exportación SQL de bases de datos, resolviéndola con volcado a disco y envío por
-  trozos para no romper la premisa de memoria constante del panel.
-- **GPT 5.6 Sol**: participé en la creación de la base del proyecto, la planificación inicial y la
-  definición de su alcance. También realicé correcciones generales en el frontend y el backend,
-  además de ajustes de integración y documentación.
-
-Ninguno de estos asistentes sustituye el criterio de quien mantiene el proyecto: las decisiones, la
-revisión y los errores siguen siendo humanos.
-
----
-
-<p align="center">
-  <strong>Tinkiva Docker Manager</strong><br>
-  Docker management without the overhead.
-</p>
+MIT.

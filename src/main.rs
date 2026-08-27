@@ -5,34 +5,23 @@ compile_error!("Tinkiva Docker Manager solo soporta Linux porque utiliza /proc, 
 
 mod app;
 mod auth;
-mod aws;
-mod buildpack;
-mod crypto;
 mod daemon;
 mod docker;
-mod git;
-mod github;
 mod http;
-mod json;
 mod metrics;
-mod model;
-mod net;
 mod proc;
 mod setup;
-mod store;
-mod templates;
 mod uninstall;
 mod util;
 
 use crate::app::{App, Config};
 use crate::http::read_request;
 use std::net::{TcpListener, TcpStream};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
 
 const HELP: &str = "\
-Tinkiva Docker Manager — panel de despliegue Docker de un solo nodo
+TinkivaCreateApp Monitor — observabilidad Docker de un solo nodo
 
 Uso: tmanager [comando]
 
@@ -49,7 +38,7 @@ Comandos:
   help             Muestra esta ayuda
 
 Sin comando abre el menú interactivo (o el asistente la primera vez).
-El estado local vive en ./tinkiva-docker-manager/ — config, pid, log, datos y apps.";
+El estado local vive en ./tinkiva-docker-manager/ — configuración, pid, log y autenticación.";
 
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -63,7 +52,10 @@ fn main() {
         Some("stop") => daemon::stop(),
         Some("status") => daemon::status(),
         Some("logs") => daemon::logs(
-            arguments.iter().skip(1).any(|argument| argument == "-f" || argument == "--follow"),
+            arguments
+                .iter()
+                .skip(1)
+                .any(|argument| argument == "-f" || argument == "--follow"),
             arguments
                 .iter()
                 .skip(1)
@@ -110,8 +102,7 @@ fn run_start() -> Result<(), String> {
 }
 
 fn serve_with_pidfile() -> Result<(), String> {
-    daemon::write_pid()
-        .map_err(|error| format!("no se pudo escribir el archivo pid: {error}"))?;
+    daemon::write_pid().map_err(|error| format!("no se pudo escribir el archivo pid: {error}"))?;
     let outcome = Config::load().and_then(serve);
     if outcome.is_err() {
         daemon::clear_pid();
@@ -144,25 +135,11 @@ fn serve(config: Config) -> Result<(), String> {
             .map_err(|error| format!("no se pudo iniciar worker HTTP: {error}"))?;
     }
 
-    let watcher = Arc::clone(&app);
-    let poll_interval = watcher.config().poll_interval_seconds;
-    thread::Builder::new()
-        .name("tdm-deployment-watcher".to_owned())
-        .stack_size(256 * 1024)
-        .spawn(move || loop {
-            thread::sleep(Duration::from_secs(poll_interval));
-            watcher.poll_deployments();
-        })
-        .map_err(|error| format!("no se pudo iniciar el watcher: {error}"))?;
-
     eprintln!(
-        "Tinkiva Docker Manager {} escuchando en {} con {} workers; polling cada {}s; raíz permitida: {}; SQLite: {}",
+        "TinkivaCreateApp Monitor {} escuchando en {} con {} workers; modo de solo lectura",
         env!("CARGO_PKG_VERSION"),
         bind,
-        workers,
-        poll_interval,
-        app.config().allowed_root.display(),
-        app.config().sqlite_path.display()
+        workers
     );
 
     for incoming in listener.incoming() {
@@ -242,9 +219,6 @@ fn handle_connection(app: &App, stream: &mut TcpStream) {
             if let Err(error) = response.write_to(stream, head_only) {
                 eprintln!("error enviando respuesta HTTP: {error}");
             }
-            // El temporal de una subida se borra pase lo que pase con la
-            // respuesta: el handler ya lo ha consumido a estas alturas.
-            request.discard_upload();
         }
         Err(error) => {
             if let Some(response) = error.response() {

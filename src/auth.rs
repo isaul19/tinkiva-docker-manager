@@ -98,7 +98,9 @@ impl Auth {
                 .attempts
                 .lock()
                 .unwrap_or_else(|lock| lock.into_inner());
-            if let Some(attempt) = attempts.get(client).filter(|attempt| attempt.locked_until > now)
+            if let Some(attempt) = attempts
+                .get(client)
+                .filter(|attempt| attempt.locked_until > now)
             {
                 return Err(LoginError::Blocked(LoginBlocked {
                     retry_after_seconds: attempt.locked_until - now,

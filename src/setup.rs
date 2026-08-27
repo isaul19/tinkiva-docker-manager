@@ -12,6 +12,7 @@ const LEGACY_STATE_DIR: &str = "tinkiva";
 const SYSTEM_CONFIG_FILE: &str = "/etc/tinkiva-docker-manager/env";
 const DEFAULT_PORT: u16 = 8787;
 const DEFAULT_UPDATE_REPO: &str = "isaul19/tinkiva-docker-manager";
+const CREATEAPP_TAG_PREFIX: &str = "createapp-v";
 
 pub enum MenuChoice {
     StartBackground,
@@ -168,7 +169,10 @@ pub fn show_menu() -> Result<MenuChoice, String> {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
 
-    println!("Se encontró configuración previa en {}.", config_path().display());
+    println!(
+        "Se encontró configuración previa en {}.",
+        config_path().display()
+    );
     println!();
     println!("? ¿Qué deseas hacer?");
     println!("    1) Iniciar el panel en segundo plano");
@@ -195,11 +199,13 @@ pub fn run_wizard(current: Option<&HashMap<String, String>>) -> Result<(), Strin
     let mut reader = stdin.lock();
 
     println!("╔══════════════════════════════════════════════════════╗");
-    println!("║   Tinkiva Docker Manager — configuración inicial     ║");
+    println!("║   TinkivaCreateApp Monitor — configuración inicial   ║");
     println!("╚══════════════════════════════════════════════════════╝");
     println!();
 
-    let current_token = current.and_then(|settings| settings.get("TDM_ADMIN_TOKEN")).map(String::as_str);
+    let current_token = current
+        .and_then(|settings| settings.get("TDM_ADMIN_TOKEN"))
+        .map(String::as_str);
     let admin_token = ask_token(&mut reader, current_token)?;
     let admin_user = current
         .and_then(|settings| settings.get("TDM_ADMIN_USER"))
@@ -223,19 +229,6 @@ pub fn run_wizard(current: Option<&HashMap<String, String>>) -> Result<(), Strin
         "Directorio de datos (estado local)",
         &default_data_dir,
     )?;
-    let sqlite_path = current
-        .and_then(|settings| settings.get("TDM_SQLITE_PATH"))
-        .cloned()
-        .unwrap_or_else(|| PathBuf::from(&data_dir).join("tinkiva.sqlite3").display().to_string());
-    let default_allowed_root = current
-        .and_then(|settings| settings.get("TDM_ALLOWED_ROOT"))
-        .cloned()
-        .unwrap_or_else(|| root.join("apps").display().to_string());
-    let allowed_root = ask_path(
-        &mut reader,
-        "Raíz permitida para apps Compose",
-        &default_allowed_root,
-    )?;
     let default_port = current
         .and_then(|settings| settings.get("TDM_BIND"))
         .and_then(|bind| bind.rsplit_once(':'))
@@ -247,28 +240,30 @@ pub fn run_wizard(current: Option<&HashMap<String, String>>) -> Result<(), Strin
     let path = config_path();
     let contents = format!(
         concat!(
-            "# Tinkiva Docker Manager\n",
+            "# Tinkiva Docker Manager — edición TinkivaCreateApp\n",
             "# Generado por el asistente inicial. Edita y reinicia para aplicar cambios.\n",
+            "TDM_EDITION=createapp\n",
             "TDM_BIND={}\n",
             "TDM_ADMIN_TOKEN={}\n",
             "TDM_ADMIN_USER={}\n",
             "TDM_ADMIN_PASSWORD={}\n",
-            "TDM_STORE=sqlite\n",
-            "TDM_SQLITE_PATH={}\n",
             "TDM_DATA_DIR={}\n",
-            "TDM_ALLOWED_ROOT={}\n"
+            "TDM_DOCKER_BIN=docker\n",
+            "TDM_WORKERS=2\n"
         ),
-        bind, admin_token, admin_user, admin_password, sqlite_path, data_dir, allowed_root
+        bind, admin_token, admin_user, admin_password, data_dir
     );
     atomic_write(&path, contents.as_bytes(), 0o600)
         .map_err(|error| format!("no se pudo escribir {}: {error}", path.display()))?;
 
     println!();
-    println!("  ✔ Configuración guardada en {} (permisos 0600)", path.display());
+    println!(
+        "  ✔ Configuración guardada en {} (permisos 0600)",
+        path.display()
+    );
     println!("  ✔ Panel:            http://{bind}");
     println!("  ✔ Datos:            {data_dir}");
-    println!("  ✔ SQLite:          {sqlite_path}");
-    println!("  ✔ Apps Compose:     {allowed_root}");
+    println!("  ✔ Modo:             observabilidad de solo lectura");
     println!("  ✔ Usuario inicial: {admin_user}");
     if current_password.is_none() {
         println!("  ✔ Contraseña inicial: {admin_password}");
@@ -328,23 +323,29 @@ pub fn run_self_update(requested_tag: Option<&str>) -> Result<(), String> {
     let arch = match std::env::consts::ARCH {
         "x86_64" => "amd64",
         "aarch64" => "arm64",
-        other => return Err(format!("arquitectura no soportada para actualizar: {other}")),
+        other => {
+            return Err(format!(
+                "arquitectura no soportada para actualizar: {other}"
+            ));
+        }
     };
 
     let tag = match requested_tag {
         Some(raw) => {
             let trimmed = raw.trim();
-            if trimmed.starts_with('v') {
+            if trimmed.starts_with(CREATEAPP_TAG_PREFIX) {
                 trimmed.to_owned()
+            } else if trimmed.starts_with('v') {
+                format!("createapp-{trimmed}")
             } else {
-                format!("v{trimmed}")
+                format!("{CREATEAPP_TAG_PREFIX}{trimmed}")
             }
         }
         None => {
             println!("Buscando la última versión de {repo}…");
-            let latest = fetch_latest_tag(&repo)?;
+            let latest = fetch_latest_createapp_tag(&repo)?;
             let current = env!("CARGO_PKG_VERSION");
-            if latest.trim_start_matches('v') == current {
+            if latest.trim_start_matches(CREATEAPP_TAG_PREFIX) == current {
                 println!("Ya estás en la última versión ({current}).");
                 return Ok(());
             }
@@ -393,7 +394,11 @@ pub fn run_self_update(requested_tag: Option<&str>) -> Result<(), String> {
     }
     let _ = fs::remove_dir_all(&directory);
 
-    println!("✔ Actualizado a {} (antes {}).", tag.trim_start_matches('v'), env!("CARGO_PKG_VERSION"));
+    println!(
+        "✔ Actualizado a {} (antes {}).",
+        tag.trim_start_matches(CREATEAPP_TAG_PREFIX),
+        env!("CARGO_PKG_VERSION")
+    );
     if Path::new("/etc/systemd/system/tinkiva-docker-manager.service").exists() {
         println!("  Reinicia el servicio: sudo systemctl restart tinkiva-docker-manager");
     } else {
@@ -407,7 +412,10 @@ pub fn run_self_update(requested_tag: Option<&str>) -> Result<(), String> {
 /// por lo que funciona aunque `/tmp` sea otro volumen o un tmpfs.
 fn replace_executable(downloaded: &Path, executable: &Path) -> io::Result<()> {
     let parent = executable.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "el ejecutable no tiene directorio padre")
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "el ejecutable no tiene directorio padre",
+        )
     })?;
     let name = executable
         .file_name()
@@ -439,8 +447,8 @@ fn replace_executable(downloaded: &Path, executable: &Path) -> io::Result<()> {
     result
 }
 
-fn fetch_latest_tag(repo: &str) -> Result<String, String> {
-    let url = format!("https://api.github.com/repos/{repo}/releases/latest");
+fn fetch_latest_createapp_tag(repo: &str) -> Result<String, String> {
+    let url = format!("https://api.github.com/repos/{repo}/releases?per_page=100");
     let output = Command::new("curl")
         .args([
             "--fail",
@@ -465,17 +473,15 @@ fn fetch_latest_tag(repo: &str) -> Result<String, String> {
     }
     let body = String::from_utf8_lossy(&output.stdout);
     let marker = "\"tag_name\":\"";
-    let start = body
-        .find(marker)
-        .ok_or_else(|| "respuesta inesperada de GitHub".to_owned())?;
-    let tag = body[start + marker.len()..]
-        .split('"')
-        .next()
-        .unwrap_or_default();
-    if tag.is_empty() {
-        return Err("no se pudo leer la versión publicada".to_owned());
+    let mut remaining = body.as_ref();
+    while let Some(start) = remaining.find(marker) {
+        remaining = &remaining[start + marker.len()..];
+        let tag = remaining.split('"').next().unwrap_or_default();
+        if tag.starts_with(CREATEAPP_TAG_PREFIX) {
+            return Ok(tag.to_owned());
+        }
     }
-    Ok(tag.to_owned())
+    Err("no se encontró una release estable de la edición TinkivaCreateApp".to_owned())
 }
 
 fn curl_download(url: &str, destination: &Path) -> Result<(), String> {
@@ -576,11 +582,7 @@ fn generate_token() -> Result<String, String> {
     random_hex(24).map_err(|error| format!("no se pudo generar el token: {error}"))
 }
 
-fn ask_path(
-    reader: &mut io::StdinLock,
-    label: &str,
-    default: &str,
-) -> Result<String, String> {
+fn ask_path(reader: &mut io::StdinLock, label: &str, default: &str) -> Result<String, String> {
     loop {
         let answer = read_line(&format!("? {label} [default: {default}]: "), reader)?;
         if answer.is_empty() {
@@ -637,11 +639,16 @@ mod tests {
         replace_executable(&downloaded, &executable).unwrap();
 
         assert_eq!(fs::read(&executable).unwrap(), b"version nueva");
-        assert_eq!(fs::metadata(&executable).unwrap().permissions().mode() & 0o777, 0o755);
-        assert!(fs::read_dir(&directory)
-            .unwrap()
-            .filter_map(Result::ok)
-            .all(|entry| !entry.file_name().to_string_lossy().contains(".update-")));
+        assert_eq!(
+            fs::metadata(&executable).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert!(
+            fs::read_dir(&directory)
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().contains(".update-"))
+        );
         fs::remove_dir_all(directory).unwrap();
     }
 }

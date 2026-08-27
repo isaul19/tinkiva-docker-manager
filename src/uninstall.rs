@@ -18,9 +18,9 @@ pub const HELP: &str = "\
 Uso: tmanager uninstall [--purge] [--yes]
 
 Detiene el panel y elimina el servicio systemd, el binario instalado y la
-documentación. Los proyectos Compose (TDM_ALLOWED_ROOT) nunca se borran.
+documentación. Los contenedores y datos administrados por otras aplicaciones nunca se borran.
 
-  --purge     Elimina también configuración, datos, historial y el usuario
+  --purge     Elimina también configuración, autenticación y el usuario
               del sistema tinkiva-docker.
   --yes, -y   No pide confirmación (necesario en modo no interactivo).";
 
@@ -49,15 +49,11 @@ pub fn run(arguments: &[String]) -> Result<(), String> {
     }
 
     let settings = setup::read_config_file();
-    let allowed_root = setting("TDM_ALLOWED_ROOT", settings.as_ref());
     let data_dir = setting("TDM_DATA_DIR", settings.as_ref());
     let config_file = setup::config_path();
     let service_installed = Path::new(SERVICE_FILE).exists();
 
-    // Las apps Compose son del usuario: se conservan siempre, incluso con --purge.
     let mut preserved: Vec<PathBuf> = Vec::new();
-    keep(&mut preserved, allowed_root.as_deref().map(PathBuf::from));
-    keep(&mut preserved, Some(PathBuf::from("/opt/tinkiva/apps")));
     if !purge {
         keep(&mut preserved, Some(config_file.clone()));
         keep(&mut preserved, Some(PathBuf::from(SYSTEM_CONFIG_DIR)));
@@ -66,18 +62,50 @@ pub fn run(arguments: &[String]) -> Result<(), String> {
     }
 
     let mut targets: Vec<Target> = Vec::new();
-    add(&mut targets, PathBuf::from(SERVICE_FILE), "servicio systemd");
-    add(&mut targets, PathBuf::from(SYSTEM_BINARY), "binario instalado");
-    add(&mut targets, PathBuf::from(SYSTEM_DOC_DIR), "documentación instalada");
+    add(
+        &mut targets,
+        PathBuf::from(SERVICE_FILE),
+        "servicio systemd",
+    );
+    add(
+        &mut targets,
+        PathBuf::from(SYSTEM_BINARY),
+        "binario instalado",
+    );
+    add(
+        &mut targets,
+        PathBuf::from(SYSTEM_DOC_DIR),
+        "documentación instalada",
+    );
     add(&mut targets, removable_executable(), "binario en uso");
     add(&mut targets, Some(daemon::pid_file()), "archivo pid");
     add(&mut targets, Some(daemon::log_file()), "log");
     if purge {
-        add(&mut targets, PathBuf::from(SYSTEM_CONFIG_DIR), "configuración del sistema");
-        add(&mut targets, PathBuf::from(SYSTEM_DATA_DIR), "datos e historial del sistema");
-        add(&mut targets, Some(config_file.clone()), "configuración local");
-        add(&mut targets, data_dir.map(PathBuf::from), "datos e historial locales");
-        add(&mut targets, Some(setup::state_root()), "directorio de estado local");
+        add(
+            &mut targets,
+            PathBuf::from(SYSTEM_CONFIG_DIR),
+            "configuración del sistema",
+        );
+        add(
+            &mut targets,
+            PathBuf::from(SYSTEM_DATA_DIR),
+            "autenticación del sistema",
+        );
+        add(
+            &mut targets,
+            Some(config_file.clone()),
+            "configuración local",
+        );
+        add(
+            &mut targets,
+            data_dir.map(PathBuf::from),
+            "autenticación local",
+        );
+        add(
+            &mut targets,
+            Some(setup::state_root()),
+            "directorio de estado local",
+        );
     }
     targets.retain(|target| {
         fs::symlink_metadata(&target.path).is_ok() && !preserved.contains(&target.path)
@@ -118,7 +146,9 @@ pub fn run(arguments: &[String]) -> Result<(), String> {
     }
 
     if service_installed {
-        let _ = Command::new("systemctl").args(["disable", "--now", SERVICE_UNIT]).status();
+        let _ = Command::new("systemctl")
+            .args(["disable", "--now", SERVICE_UNIT])
+            .status();
     } else {
         let _ = daemon::stop();
     }
@@ -153,7 +183,7 @@ pub fn run(arguments: &[String]) -> Result<(), String> {
     if !purge {
         println!("  Configuración e historial se conservaron; usa --purge para borrarlos.");
     }
-    println!("  Tus proyectos Compose y sus contenedores siguen en su sitio.");
+    println!("  Los contenedores y datos administrados externamente siguen en su sitio.");
     Ok(())
 }
 
@@ -165,7 +195,9 @@ fn setting(key: &str, settings: Option<&HashMap<String, String>>) -> Option<Stri
 }
 
 fn keep(preserved: &mut Vec<PathBuf>, path: Option<PathBuf>) {
-    let Some(path) = path.map(|path| absolute(&path)) else { return };
+    let Some(path) = path.map(|path| absolute(&path)) else {
+        return;
+    };
     if path.exists() && !preserved.contains(&path) {
         preserved.push(path);
     }
@@ -173,7 +205,10 @@ fn keep(preserved: &mut Vec<PathBuf>, path: Option<PathBuf>) {
 
 fn add<P: Into<Option<PathBuf>>>(targets: &mut Vec<Target>, path: P, label: &'static str) {
     if let Some(path) = path.into() {
-        targets.push(Target { path: absolute(&path), label });
+        targets.push(Target {
+            path: absolute(&path),
+            label,
+        });
     }
 }
 
@@ -251,7 +286,7 @@ fn remove_path(path: &Path, preserved: &[PathBuf]) -> io::Result<()> {
 fn confirm() -> Result<(), String> {
     if !io::stdin().is_terminal() {
         return Err(
-            "sin terminal interactiva: repite el comando con --yes para confirmar".to_owned()
+            "sin terminal interactiva: repite el comando con --yes para confirmar".to_owned(),
         );
     }
     print!("? Escribe 'si' para continuar: ");
@@ -305,11 +340,17 @@ mod tests {
     #[test]
     fn cargo_artifacts_are_never_removed() {
         assert!(!needs_root(
-            &[Target { path: PathBuf::from("/home/user/tinkiva-docker-manager"), label: "x" }],
+            &[Target {
+                path: PathBuf::from("/home/user/tinkiva-docker-manager"),
+                label: "x"
+            }],
             false
         ));
         assert!(needs_root(
-            &[Target { path: PathBuf::from(SYSTEM_BINARY), label: "x" }],
+            &[Target {
+                path: PathBuf::from(SYSTEM_BINARY),
+                label: "x"
+            }],
             false
         ));
     }

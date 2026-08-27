@@ -2,8 +2,7 @@ import { createContext } from 'preact';
 import { useContext } from 'preact/hooks';
 
 /**
- * Datos globales del panel: `/api/info`, `/api/catalog` y utilidades para
- * refrescarlos. Evita que cada vista vuelva a pedir el catálogo de recursos.
+ * Datos globales de observabilidad y una señal para refrescar las vistas.
  */
 export const AppContext = createContext(null);
 

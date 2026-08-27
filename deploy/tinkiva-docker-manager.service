@@ -1,5 +1,5 @@
 [Unit]
-Description=Tinkiva Docker Manager
+Description=Tinkiva Docker Manager - read-only monitoring panel
 Documentation=file:/usr/local/share/doc/tinkiva-docker-manager/README.md
 After=network-online.target
 Wants=network-online.target
@@ -23,7 +23,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/tinkiva-docker-manager /opt/tinkiva/apps
+ReadWritePaths=/var/lib/tinkiva-docker-manager
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

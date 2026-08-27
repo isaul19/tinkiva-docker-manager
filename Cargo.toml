@@ -3,7 +3,7 @@ name = "tinkiva-docker-manager"
 version = "0.15.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Panel de despliegue Docker ultraligero y de un solo nodo"
+description = "Panel ultraligero de observabilidad Docker de un solo nodo"
 license = "MIT"
 authors = ["Tinkiva"]
 
@@ -13,7 +13,6 @@ path = "src/main.rs"
 
 [dependencies]
 argon2 = { version = "0.5.3", default-features = false, features = ["alloc", "password-hash"] }
-rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 
 [profile.release]
 opt-level = "z"

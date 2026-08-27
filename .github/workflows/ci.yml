@@ -42,5 +42,5 @@ jobs:
       - run: cargo clippy --all-targets
       - run: cargo test
       - run: cargo build --release
-      - name: Smoke test API and deployment lifecycle
+      - name: Smoke test read-only monitoring API
         run: ./scripts/smoke-test.sh target/release/tmanager

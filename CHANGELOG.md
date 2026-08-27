@@ -1,5 +1,17 @@
 # Changelog
 
+## TinkivaCreateApp 0.15.0 — 2026-08-27
+
+### Edición estable para TinkivaCreateApp
+
+- Nueva línea estable publicada con tags `createapp-v*`, independiente de `v0.14.x` y del preview `v0.15.0-panel.1`.
+- TinkivaCreateApp u otro sistema externo es responsable de todos los despliegues.
+- El panel muestra CPU, RAM, disco, estado y consumo de contenedores, imágenes en ejecución y logs.
+- Se retiraron proyectos, historial, webhooks, polling, rollback, GitHub, ECR, Compose, consolas,
+  importación/exportación SQL y todas las acciones de escritura sobre Docker.
+- La API se limita a salud, autenticación, métricas del host, inventario de contenedores y logs.
+- `tmanager update` solo busca releases `createapp-v*`, evitando cambiar de edición accidentalmente.
+
 ## 0.15.0 — 2026-08-27
 
 ### Estado interno en SQLite

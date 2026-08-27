@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "createapp-v*"
 
 permissions:
   contents: write
@@ -85,5 +85,6 @@ jobs:
             dist/* \
             --title "${{ github.ref_name }}" \
             --generate-notes \
+            --latest=false \
             --verify-tag \
           || gh release upload "${{ github.ref_name }}" dist/* --clobber

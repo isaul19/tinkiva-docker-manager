@@ -1,21 +1,12 @@
-use crate::util::{parse_urlencoded, unique_suffix};
+use crate::util::parse_urlencoded;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpStream};
-use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
 use std::time::Duration;
 
 const MAX_HEADER_BYTES: usize = 32 * 1024;
-/// Los webhooks de `push` de GitHub incluyen la lista de commits, así que el
-/// límite anterior de 128 KiB se quedaba corto en pushes grandes.
-const MAX_BODY_BYTES: usize = 512 * 1024;
-/// Las subidas de volcados SQL no pasan por memoria: se escriben en un temporal
-/// mientras llegan, así que aquí el techo puede ser el de un `.sql` de verdad.
-const MAX_UPLOAD_BYTES: usize = 1024 * 1024 * 1024;
-const UPLOAD_CHUNK_BYTES: usize = 64 * 1024;
+const MAX_BODY_BYTES: usize = 64 * 1024;
 
 #[derive(Debug)]
 pub struct Request {
@@ -24,9 +15,6 @@ pub struct Request {
     pub query: HashMap<String, String>,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
-    /// Cuerpo que se guardó en disco en vez de en `body`. Solo lo tienen las
-    /// rutas de subida; el handler lo consume y `discard_upload` lo borra.
-    pub upload: Option<PathBuf>,
     peer_ip: String,
 }
 
@@ -57,15 +45,6 @@ impl Request {
         self.peer_ip.clone()
     }
 
-    /// Borra el temporal de la subida. Se llama siempre al cerrar la conexión,
-    /// haya ido bien la petición o no: si no, un `.sql` de un giga se quedaría
-    /// en /tmp hasta el próximo reinicio.
-    pub fn discard_upload(&self) {
-        if let Some(path) = &self.upload {
-            let _ = fs::remove_file(path);
-        }
-    }
-
     pub fn form(&self) -> Result<HashMap<String, String>, String> {
         let content_type = self.header("content-type").unwrap_or_default();
         if !content_type
@@ -81,25 +60,18 @@ impl Request {
     }
 }
 
-const STREAM_CHUNK_BYTES: usize = 64 * 1024;
-
 #[derive(Debug)]
 enum Body {
     /// Los archivos estáticos se sirven prestados desde `.rodata`: sin esta
     /// distinción cada petición de `/app.js` copiaría el bundle entero a un
     /// `Vec` nuevo, multiplicando el consumo del panel por número de workers.
     Bytes(Cow<'static, [u8]>),
-    /// Cuerpo que vive en disco y se envía por trozos. Un volcado SQL puede
-    /// pesar gigabytes: cargarlo en un `Vec` tiraría el panel. El archivo se
-    /// borra siempre al terminar, aunque el cliente corte la descarga.
-    TemporaryFile { path: PathBuf, length: u64 },
 }
 
 impl Body {
     fn length(&self) -> u64 {
         match self {
             Self::Bytes(bytes) => bytes.len() as u64,
-            Self::TemporaryFile { length, .. } => *length,
         }
     }
 }
@@ -131,24 +103,6 @@ impl Response {
         }
     }
 
-    /// Descarga servida desde un archivo temporal que se borra al terminar.
-    /// `filename` se sanea aquí: solo llega al navegador como ASCII seguro.
-    pub fn temporary_file_download(
-        path: PathBuf,
-        length: u64,
-        content_type: &'static str,
-        filename: &str,
-    ) -> Self {
-        let disposition = format!("attachment; filename=\"{}\"", safe_filename(filename));
-        Self {
-            status: 200,
-            content_type,
-            body: Body::TemporaryFile { path, length },
-            headers: Vec::new(),
-        }
-        .with_header("Content-Disposition", disposition)
-    }
-
     pub fn json(status: u16, body: String) -> Self {
         Self::new(status, "application/json; charset=utf-8", body.into_bytes())
     }
@@ -177,12 +131,6 @@ impl Response {
         Self::asset("image/svg+xml; charset=utf-8", body)
     }
 
-    /// Redirección usada por los retornos del navegador desde GitHub.
-    pub fn redirect(location: &str) -> Self {
-        Self::new(303, "text/plain; charset=utf-8", Vec::new())
-            .with_header("Location", location)
-    }
-
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.push((name.into(), value.into()));
         self
@@ -204,19 +152,20 @@ impl Response {
         head.push_str("Permissions-Policy: camera=(), microphone=(), geolocation=()\r\n");
         head.push_str("Cross-Origin-Resource-Policy: same-origin\r\n");
         head.push_str("Cache-Control: no-store\r\n");
-        // `form-action` incluye github.com porque el alta «un clic» de la GitHub App
-        // se hace con un POST del navegador al formulario de manifiesto de GitHub.
-        // `img-src` añade los avatares de las cuentas donde está instalada la App.
         head.push_str(concat!(
             "Content-Security-Policy: default-src 'self'; ",
             "connect-src 'self'; script-src 'self'; style-src 'self'; ",
-            "img-src 'self' data: https://avatars.githubusercontent.com; ",
+            "img-src 'self' data:; ",
             "object-src 'none'; frame-ancestors 'none'; ",
-            "base-uri 'none'; form-action 'self' https://github.com\r\n"
+            "base-uri 'none'; form-action 'self'\r\n"
         ));
 
         for (name, value) in self.headers {
-            if !name.contains('\r') && !name.contains('\n') && !value.contains('\r') && !value.contains('\n') {
+            if !name.contains('\r')
+                && !name.contains('\n')
+                && !value.contains('\r')
+                && !value.contains('\n')
+            {
                 head.push_str(&name);
                 head.push_str(": ");
                 head.push_str(&value);
@@ -232,52 +181,8 @@ impl Response {
                     stream.write_all(&bytes)?;
                 }
             }
-            Body::TemporaryFile { path, .. } => {
-                let result = if head_only {
-                    Ok(())
-                } else {
-                    write_file_body(stream, &path)
-                };
-                // El volcado es de un solo uso: se borra tanto si la descarga
-                // terminó como si el navegador cortó a mitad.
-                let _ = fs::remove_file(&path);
-                result?;
-            }
         }
         stream.flush()
-    }
-}
-
-fn write_file_body(stream: &mut TcpStream, path: &PathBuf) -> io::Result<()> {
-    let mut file = File::open(path)?;
-    let mut chunk = vec![0_u8; STREAM_CHUNK_BYTES];
-    loop {
-        let read = file.read(&mut chunk)?;
-        if read == 0 {
-            return Ok(());
-        }
-        stream.write_all(&chunk[..read])?;
-    }
-}
-
-/// Deja el nombre en ASCII imprimible sin comillas ni separadores de ruta, para
-/// que no pueda romper la cabecera `Content-Disposition`.
-fn safe_filename(value: &str) -> String {
-    let cleaned: String = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .take(120)
-        .collect();
-    if cleaned.is_empty() {
-        "descarga".to_owned()
-    } else {
-        cleaned
     }
 }
 
@@ -375,32 +280,21 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, HttpReadError> {
         .map_err(|_| HttpReadError::BadRequest("Content-Length inválido"))?;
 
     let (path, raw_query) = target.split_once('?').unwrap_or((target, ""));
-    let streamed = is_upload(method, path, &headers);
-    if content_length > if streamed { MAX_UPLOAD_BYTES } else { MAX_BODY_BYTES } {
+    if content_length > MAX_BODY_BYTES {
         return Err(HttpReadError::PayloadTooLarge);
     }
 
-    let mut body = Vec::new();
-    let mut upload = None;
-    if streamed {
-        upload = Some(stream_body_to_file(
-            stream,
-            &buffer[header_end..],
-            content_length,
-        )?);
-    } else {
-        body = buffer[header_end..].to_vec();
-        while body.len() < content_length {
-            let remaining = content_length - body.len();
-            let mut chunk = vec![0_u8; remaining.min(4096)];
-            let read = stream.read(&mut chunk).map_err(HttpReadError::Io)?;
-            if read == 0 {
-                return Err(HttpReadError::BadRequest("cuerpo incompleto"));
-            }
-            body.extend_from_slice(&chunk[..read]);
+    let mut body = buffer[header_end..].to_vec();
+    while body.len() < content_length {
+        let remaining = content_length - body.len();
+        let mut chunk = vec![0_u8; remaining.min(4096)];
+        let read = stream.read(&mut chunk).map_err(HttpReadError::Io)?;
+        if read == 0 {
+            return Err(HttpReadError::BadRequest("cuerpo incompleto"));
         }
-        body.truncate(content_length);
+        body.extend_from_slice(&chunk[..read]);
     }
+    body.truncate(content_length);
 
     let query = parse_urlencoded(raw_query)
         .map_err(|_| HttpReadError::BadRequest("query string inválido"))?;
@@ -411,65 +305,8 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, HttpReadError> {
         query,
         headers,
         body,
-        upload,
         peer_ip,
     })
-}
-
-/// Rutas cuyo cuerpo se escribe en disco en vez de en memoria.
-///
-/// Se exige la cabecera `Authorization`: el token se valida más adelante, pero
-/// sin esta comprobación cualquiera podría hacer que el panel escribiera un giga
-/// en `/tmp` antes de recibir su 401.
-fn is_upload(method: &str, path: &str, headers: &HashMap<String, String>) -> bool {
-    method.eq_ignore_ascii_case("POST")
-        && headers.contains_key("authorization")
-        && path.starts_with("/api/containers/")
-        && path.ends_with("/import")
-}
-
-/// Vuelca el cuerpo en un temporal 0600, empezando por lo que ya se leyó junto
-/// a las cabeceras. Si algo falla, el archivo se borra antes de devolver.
-fn stream_body_to_file(
-    stream: &mut TcpStream,
-    prefix: &[u8],
-    content_length: usize,
-) -> Result<PathBuf, HttpReadError> {
-    // Subir cientos de megabytes desde una conexión doméstica tiene pausas más
-    // largas que los 10 s con los que se leen las cabeceras.
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
-
-    let path = std::env::temp_dir().join(format!("tdm-upload-{}.bin", unique_suffix()));
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&path)
-        .map_err(HttpReadError::Io)?;
-
-    let mut written = prefix.len().min(content_length);
-    let outcome = (|| -> Result<(), HttpReadError> {
-        file.write_all(&prefix[..written]).map_err(HttpReadError::Io)?;
-        let mut chunk = vec![0_u8; UPLOAD_CHUNK_BYTES];
-        while written < content_length {
-            let wanted = (content_length - written).min(UPLOAD_CHUNK_BYTES);
-            let read = stream.read(&mut chunk[..wanted]).map_err(HttpReadError::Io)?;
-            if read == 0 {
-                return Err(HttpReadError::BadRequest("cuerpo incompleto"));
-            }
-            file.write_all(&chunk[..read]).map_err(HttpReadError::Io)?;
-            written += read;
-        }
-        file.flush().map_err(HttpReadError::Io)
-    })();
-
-    match outcome {
-        Ok(()) => Ok(path),
-        Err(error) => {
-            let _ = fs::remove_file(&path);
-            Err(error)
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -538,14 +375,6 @@ mod tests {
     }
 
     #[test]
-    fn sanitizes_download_filenames() {
-        assert_eq!(safe_filename("app_20260815143052.sql"), "app_20260815143052.sql");
-        assert_eq!(safe_filename("../etc/passwd"), ".._etc_passwd");
-        assert_eq!(safe_filename("a\"\r\nb"), "a___b");
-        assert_eq!(safe_filename(""), "descarga");
-    }
-
-    #[test]
     fn forwarded_ip_is_only_trusted_from_loopback_and_uses_the_last_hop() {
         let request = |peer_ip: &str, forwarded: &str| Request {
             method: "GET".to_owned(),
@@ -553,7 +382,6 @@ mod tests {
             query: HashMap::new(),
             headers: HashMap::from([("x-forwarded-for".to_owned(), forwarded.to_owned())]),
             body: Vec::new(),
-            upload: None,
             peer_ip: peer_ip.to_owned(),
         };
 

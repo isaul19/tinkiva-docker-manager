@@ -1,54 +1,36 @@
-//! Lanzador de subprocesos compartido por `docker` y `git`.
-//!
-//! Redirige stdout/stderr a archivos temporales con permisos 0600 en lugar de a
-//! tuberías: evita bloqueos cuando el proceso hijo escribe más de lo que cabe en
-//! el búfer del pipe y mantiene el uso de memoria del panel constante aunque el
-//! comando produzca megabytes de salida.
-
 use crate::util::{truncate_text, unique_suffix};
 use std::ffi::OsStr;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+
+const MAX_CAPTURE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct CommandResult {
     pub success: bool,
+    pub timed_out: bool,
     pub stdout: String,
     pub stderr: String,
-    pub timed_out: bool,
-    pub duration_ms: u128,
 }
 
 impl CommandResult {
     pub fn summary(&self) -> String {
+        if self.timed_out {
+            return "el comando excedió el tiempo máximo".to_owned();
+        }
         let stdout = self.stdout.trim();
         let stderr = self.stderr.trim();
-        let message = if !stderr.is_empty() {
-            stderr
-        } else if !stdout.is_empty() {
-            stdout
-        } else if self.timed_out {
-            "el comando agotó el tiempo de espera"
-        } else {
-            "el comando no devolvió detalles"
-        };
-        truncate_text(message, 4000)
-    }
-
-    /// Igual que [`Self::summary`] pero eliminando cualquier credencial que el
-    /// subproceso haya podido reflejar en su salida.
-    pub fn redacted_summary(&self, secrets: &[&str]) -> String {
-        let mut summary = self.summary();
-        for secret in secrets {
-            if secret.len() >= 8 {
-                summary = summary.replace(secret, "***");
-            }
+        match (stdout.is_empty(), stderr.is_empty()) {
+            (false, false) => truncate_text(&format!("{stdout}\n{stderr}"), 16_000),
+            (false, true) => truncate_text(stdout, 16_000),
+            (true, false) => truncate_text(stderr, 16_000),
+            (true, true) if self.success => "comando completado".to_owned(),
+            (true, true) => "el comando terminó con error".to_owned(),
         }
-        summary
     }
 }
 
@@ -63,58 +45,29 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    execute(binary, arguments, working_directory, environment, Input::None, timeout)
-}
-
-/// Igual que [`run`] pero escribiendo `input` en la entrada estándar del hijo.
-/// Es la forma de pasarle un secreto a un comando sin que aparezca en `argv` y,
-/// por tanto, en la salida de `ps` para cualquier usuario del servidor.
-pub fn run_with_input<I, S>(
-    binary: &Path,
-    arguments: I,
-    working_directory: Option<&Path>,
-    environment: &[(&str, &str)],
-    input: Option<&str>,
-    timeout: Duration,
-) -> Result<CommandResult, String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let input = input.map_or(Input::None, Input::Text);
-    execute(binary, arguments, working_directory, environment, input, timeout)
-}
-
-/// Igual que [`run`] pero conectando un archivo a la entrada estándar del hijo.
-/// El kernel hace de intermediario: un `.sql` de importación puede pesar cientos
-/// de megabytes y el panel nunca llega a tenerlo en memoria.
-pub fn run_with_file_input<I, S>(
-    binary: &Path,
-    arguments: I,
-    working_directory: Option<&Path>,
-    environment: &[(&str, &str)],
-    input: &Path,
-    timeout: Duration,
-) -> Result<CommandResult, String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    execute(
+    let suffix = unique_suffix();
+    let stdout_path = std::env::temp_dir().join(format!("tdm-command-{suffix}.stdout"));
+    let stderr_path = std::env::temp_dir().join(format!("tdm-command-{suffix}.stderr"));
+    let result = execute(
         binary,
         arguments,
         working_directory,
         environment,
-        Input::File(input),
         timeout,
-    )
-}
-
-/// Origen de la entrada estándar del proceso hijo.
-enum Input<'a> {
-    None,
-    Text(&'a str),
-    File(&'a Path),
+        &stdout_path,
+        &stderr_path,
+    );
+    let stdout = read_capture(&stdout_path);
+    let stderr = read_capture(&stderr_path);
+    let _ = fs::remove_file(&stdout_path);
+    let _ = fs::remove_file(&stderr_path);
+    let (success, timed_out) = result?;
+    Ok(CommandResult {
+        success,
+        timed_out,
+        stdout,
+        stderr,
+    })
 }
 
 fn execute<I, S>(
@@ -122,234 +75,59 @@ fn execute<I, S>(
     arguments: I,
     working_directory: Option<&Path>,
     environment: &[(&str, &str)],
-    input: Input<'_>,
     timeout: Duration,
-) -> Result<CommandResult, String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let temporary_directory = std::env::temp_dir();
-    let suffix = unique_suffix();
-    let stdout_path = temporary_directory.join(format!("tdm-{suffix}.stdout"));
-    let stderr_path = temporary_directory.join(format!("tdm-{suffix}.stderr"));
-
-    let stdout_file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&stdout_path)
-        .map_err(|error| format!("no se pudo crear salida temporal: {error}"))?;
-    let stderr_file = match OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&stderr_path)
-    {
-        Ok(file) => file,
-        Err(error) => {
-            let _ = fs::remove_file(&stdout_path);
-            return Err(format!("no se pudo crear error temporal: {error}"));
-        }
-    };
-
-    let stdin = match &input {
-        Input::None => Stdio::null(),
-        Input::Text(_) => Stdio::piped(),
-        Input::File(path) => match File::open(path) {
-            Ok(file) => Stdio::from(file),
-            Err(error) => {
-                let _ = fs::remove_file(&stdout_path);
-                let _ = fs::remove_file(&stderr_path);
-                return Err(format!("no se pudo leer {}: {error}", path.display()));
-            }
-        },
-    };
-
-    let mut command = Command::new(binary);
-    command
-        .args(arguments)
-        .stdin(stdin)
-        .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file));
-    for (key, value) in environment {
-        command.env(key, value);
-    }
-    if let Some(directory) = working_directory {
-        command.current_dir(directory);
-    }
-
-    let started = Instant::now();
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            let _ = fs::remove_file(&stdout_path);
-            let _ = fs::remove_file(&stderr_path);
-            return Err(format!("no se pudo ejecutar {}: {error}", binary.display()));
-        }
-    };
-
-    if let Input::Text(input) = input {
-        // El descriptor se cierra al salir del bloque: sin EOF el hijo esperaría
-        // para siempre y el timeout lo mataría sin haber hecho nada.
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            let _ = stdin.write_all(input.as_bytes());
-        }
-    }
-
-    let (status, timed_out) = match wait_with_timeout(&mut child, started, timeout) {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            let _ = fs::remove_file(&stdout_path);
-            let _ = fs::remove_file(&stderr_path);
-            return Err(error);
-        }
-    };
-
-    let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
-    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
-    let _ = fs::remove_file(&stdout_path);
-    let _ = fs::remove_file(&stderr_path);
-
-    Ok(CommandResult {
-        success: status.success() && !timed_out,
-        stdout,
-        stderr,
-        timed_out,
-        duration_ms: started.elapsed().as_millis(),
-    })
-}
-
-/// Resultado de [`run_to_file`]: la salida vive en disco, así que aquí solo
-/// viajan el estado y el error, nunca los megabytes del volcado.
-#[derive(Debug, Clone)]
-pub struct FileCommandResult {
-    pub success: bool,
-    pub stderr: String,
-    pub bytes: u64,
-    pub timed_out: bool,
-}
-
-impl FileCommandResult {
-    pub fn summary(&self) -> String {
-        let stderr = self.stderr.trim();
-        let message = if !stderr.is_empty() {
-            stderr
-        } else if self.timed_out {
-            "el comando agotó el tiempo de espera"
-        } else {
-            "el comando no devolvió detalles"
-        };
-        truncate_text(message, 4000)
-    }
-}
-
-/// Igual que [`run`] pero dejando stdout directamente en `stdout_path`, sin
-/// pasarlo nunca por memoria. Es lo que permite exportar bases de datos de
-/// varios gigabytes sin que el panel crezca: el archivo se escribe con 0600 y
-/// quien llama es responsable de borrarlo.
-pub fn run_to_file<I, S>(
-    binary: &Path,
-    arguments: I,
     stdout_path: &Path,
-    environment: &[(&str, &str)],
-    timeout: Duration,
-) -> Result<FileCommandResult, String>
+    stderr_path: &Path,
+) -> Result<(bool, bool), String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let stderr_path = std::env::temp_dir().join(format!("tdm-{}.stderr", unique_suffix()));
-
-    let stdout_file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(stdout_path)
-        .map_err(|error| format!("no se pudo crear el archivo de salida: {error}"))?;
-    let stderr_file = match OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&stderr_path)
-    {
-        Ok(file) => file,
-        Err(error) => {
-            let _ = fs::remove_file(stdout_path);
-            return Err(format!("no se pudo crear error temporal: {error}"));
-        }
-    };
-
+    let stdout = private_file(stdout_path)?;
+    let stderr = private_file(stderr_path)?;
     let mut command = Command::new(binary);
     command
         .args(arguments)
         .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file));
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    if let Some(directory) = working_directory {
+        command.current_dir(directory);
+    }
     for (key, value) in environment {
         command.env(key, value);
     }
-
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("no se pudo ejecutar {}: {error}", binary.display()))?;
     let started = Instant::now();
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            let _ = fs::remove_file(stdout_path);
-            let _ = fs::remove_file(&stderr_path);
-            return Err(format!("no se pudo ejecutar {}: {error}", binary.display()));
-        }
-    };
-
-    let (status, timed_out) = match wait_with_timeout(&mut child, started, timeout) {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            let _ = fs::remove_file(stdout_path);
-            let _ = fs::remove_file(&stderr_path);
-            return Err(error);
-        }
-    };
-
-    // El stderr de un volcado son avisos cortos; se lee entero pero acotado.
-    let stderr = truncate_text(&fs::read_to_string(&stderr_path).unwrap_or_default(), 8000);
-    let _ = fs::remove_file(&stderr_path);
-    let bytes = fs::metadata(stdout_path).map(|meta| meta.len()).unwrap_or(0);
-
-    Ok(FileCommandResult {
-        success: status.success() && !timed_out,
-        stderr,
-        bytes,
-        timed_out,
-    })
-}
-
-/// Espera al hijo sondeando cada 50 ms y lo mata si agota el tiempo. Devuelve
-/// `true` en el segundo campo cuando hubo que matarlo.
-fn wait_with_timeout(
-    child: &mut Child,
-    started: Instant,
-    timeout: Duration,
-) -> Result<(ExitStatus, bool), String> {
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return Ok((status, false)),
-            Ok(None) if started.elapsed() < timeout => {
-                thread::sleep(Duration::from_millis(50));
-            }
+            Ok(Some(status)) => return Ok((status.success(), false)),
+            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(20)),
             Ok(None) => {
                 let _ = child.kill();
-                let status = child
-                    .wait()
-                    .map_err(|error| format!("no se pudo finalizar el proceso: {error}"))?;
-                return Ok((status, true));
-            }
-            Err(error) => {
-                let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("no se pudo esperar el proceso: {error}"));
+                return Ok((false, true));
             }
+            Err(error) => return Err(format!("no se pudo esperar el comando: {error}")),
         }
     }
+}
+
+fn private_file(path: &Path) -> Result<fs::File, String> {
+    OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| format!("no se pudo crear {}: {error}", path.display()))
+}
+
+fn read_capture(path: &PathBuf) -> String {
+    fs::read(path)
+        .map(|bytes| truncate_text(&String::from_utf8_lossy(&bytes), MAX_CAPTURE_BYTES))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -357,66 +135,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn captures_output_of_a_failed_command() {
+    fn captures_failed_command_output() {
         let result = run(
             Path::new("/bin/sh"),
-            ["-c", "echo hola; echo fallo >&2; exit 3"],
+            ["-c", "printf out; printf err >&2; exit 7"],
             None,
             &[],
-            Duration::from_secs(10),
+            Duration::from_secs(2),
         )
         .unwrap();
-
         assert!(!result.success);
-        assert_eq!(result.stdout.trim(), "hola");
-        assert_eq!(result.summary(), "fallo");
+        assert_eq!(result.stdout, "out");
+        assert_eq!(result.stderr, "err");
     }
 
     #[test]
-    fn kills_processes_that_exceed_the_timeout() {
+    fn kills_commands_after_timeout() {
         let result = run(
             Path::new("/bin/sh"),
-            ["-c", "sleep 30"],
+            ["-c", "sleep 5"],
             None,
             &[],
-            Duration::from_millis(300),
+            Duration::from_millis(50),
         )
         .unwrap();
-
         assert!(result.timed_out);
         assert!(!result.success);
-    }
-
-    #[test]
-    fn writes_stdout_to_the_requested_file() {
-        let path = std::env::temp_dir().join(format!("tdm-test-{}.sql", unique_suffix()));
-        let result = run_to_file(
-            Path::new("/bin/sh"),
-            ["-c", "echo 'CREATE TABLE t();'; echo aviso >&2"],
-            &path,
-            &[],
-            Duration::from_secs(10),
-        )
-        .unwrap();
-
-        assert!(result.success);
-        assert_eq!(result.stderr.trim(), "aviso");
-        assert_eq!(result.bytes, 18);
-        assert_eq!(fs::read_to_string(&path).unwrap().trim(), "CREATE TABLE t();");
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn redaction_hides_credentials_from_summaries() {
-        let result = CommandResult {
-            success: false,
-            stdout: String::new(),
-            stderr: "fatal: no se pudo acceder con ghs_tokensupersecreto".to_owned(),
-            timed_out: false,
-            duration_ms: 5,
-        };
-        let summary = result.redacted_summary(&["ghs_tokensupersecreto"]);
-        assert!(summary.contains("***"));
-        assert!(!summary.contains("ghs_tokensupersecreto"));
     }
 }

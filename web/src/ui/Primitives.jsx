@@ -67,16 +67,6 @@ export function containerStateLabel(state) {
   return labels[String(state || '').toLowerCase()] || state || 'Desconocido';
 }
 
-export function deploymentStatusLabel(status) {
-  const labels = {
-    success: 'Completado',
-    failed: 'Fallido',
-    running: 'En curso',
-    pending: 'Pendiente',
-  };
-  return labels[String(status || '').toLowerCase()] || status || 'Desconocido';
-}
-
 export function Spinner({ label = 'Cargando…' }) {
   return (
     <div class="state-block">
