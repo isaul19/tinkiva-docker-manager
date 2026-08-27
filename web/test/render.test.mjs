@@ -391,7 +391,8 @@ const test = (name, body) => tests.push([name, body]);
 test('sin token muestra el acceso y la firma Rust + Preact', async () => {
   const { text, html } = await mount();
   assert.match(text, /Docker Manager/);
-  assert.match(text, /Token administrador/);
+  assert.match(text, /Usuario/);
+  assert.match(text, /Contraseña/);
   assert.match(text, /Construido con/);
   assert.match(text, /Rust/);
   assert.match(text, /Preact/);

@@ -6,7 +6,9 @@ Tinkiva Docker Manager es una herramienta administrativa de un solo host. El pro
 
 ## Controles incluidos
 
-- Token administrador obligatorio y comparación de tiempo constante.
+- Acceso al panel mediante usuario, hash Argon2 y sesión opaca de 12 horas.
+- Cambio obligatorio de la contraseña inicial y bloqueo persistente por IP tras fallos.
+- Token administrador separado para automatizaciones y comparación de tiempo constante.
 - Token individual por proyecto para webhooks.
 - Restricción opcional por rama.
 - Validaciones conservadoras para slug, rama, referencia de imagen, contenedor y variables de entorno.

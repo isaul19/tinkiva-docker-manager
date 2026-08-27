@@ -201,6 +201,16 @@ pub fn run_wizard(current: Option<&HashMap<String, String>>) -> Result<(), Strin
 
     let current_token = current.and_then(|settings| settings.get("TDM_ADMIN_TOKEN")).map(String::as_str);
     let admin_token = ask_token(&mut reader, current_token)?;
+    let admin_user = current
+        .and_then(|settings| settings.get("TDM_ADMIN_USER"))
+        .cloned()
+        .unwrap_or_else(|| "admin".to_owned());
+    let current_password = current.and_then(|settings| settings.get("TDM_ADMIN_PASSWORD"));
+    let admin_password = match current_password {
+        Some(password) => password.clone(),
+        None if current.is_some() => admin_token.clone(),
+        None => generate_token()?,
+    };
 
     println!();
     let root = state_root();
@@ -237,10 +247,12 @@ pub fn run_wizard(current: Option<&HashMap<String, String>>) -> Result<(), Strin
             "# Generado por el asistente inicial. Edita y reinicia para aplicar cambios.\n",
             "TDM_BIND={}\n",
             "TDM_ADMIN_TOKEN={}\n",
+            "TDM_ADMIN_USER={}\n",
+            "TDM_ADMIN_PASSWORD={}\n",
             "TDM_DATA_DIR={}\n",
             "TDM_ALLOWED_ROOT={}\n"
         ),
-        bind, admin_token, data_dir, allowed_root
+        bind, admin_token, admin_user, admin_password, data_dir, allowed_root
     );
     atomic_write(&path, contents.as_bytes(), 0o600)
         .map_err(|error| format!("no se pudo escribir {}: {error}", path.display()))?;
@@ -250,6 +262,11 @@ pub fn run_wizard(current: Option<&HashMap<String, String>>) -> Result<(), Strin
     println!("  ✔ Panel:            http://{bind}");
     println!("  ✔ Datos:            {data_dir}");
     println!("  ✔ Apps Compose:     {allowed_root}");
+    println!("  ✔ Usuario inicial: {admin_user}");
+    if current_password.is_none() {
+        println!("  ✔ Contraseña inicial: {admin_password}");
+        println!("  El panel exigirá cambiarla durante el primer acceso.");
+    }
     if current_token != Some(admin_token.as_str()) {
         println!("  ✔ Token:            {admin_token}");
         println!("  Guárdalo ahora: no se volverá a mostrar completo en pantalla.");

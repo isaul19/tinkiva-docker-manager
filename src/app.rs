@@ -1,3 +1,4 @@
+use crate::auth::{Auth, LoginError};
 use crate::docker::{self, DockerClient};
 use crate::git::GitClient;
 use crate::aws::{self, Ecr, EcrCredentials};
@@ -36,6 +37,8 @@ const FAVICON_SVG: &str = include_str!("../web/favicon.svg");
 pub struct Config {
     pub bind: String,
     pub admin_token: String,
+    pub admin_user: String,
+    pub admin_password: String,
     pub data_dir: PathBuf,
     pub allowed_root: PathBuf,
     pub docker_binary: PathBuf,
@@ -68,6 +71,10 @@ impl Config {
         {
             return Err("TDM_ADMIN_TOKEN debe tener entre 32 y 256 caracteres sin espacios".to_owned());
         }
+        let admin_user = setting("TDM_ADMIN_USER").unwrap_or_else(|| "admin".to_owned());
+        // Compatibilidad: en instalaciones existentes el token es la contraseña
+        // inicial. El primer acceso obliga a sustituirla y solo se guarda su hash.
+        let admin_password = setting("TDM_ADMIN_PASSWORD").unwrap_or_else(|| admin_token.clone());
 
         let data_dir = PathBuf::from(
             setting("TDM_DATA_DIR")
@@ -111,6 +118,8 @@ impl Config {
         Ok(Self {
             bind,
             admin_token,
+            admin_user,
+            admin_password,
             data_dir,
             allowed_root,
             docker_binary: PathBuf::from(
@@ -150,6 +159,7 @@ pub struct App {
     git: GitClient,
     github: GitHub,
     ecr: Ecr,
+    auth: Auth,
     capabilities: Capabilities,
     deploy_lock: Mutex<()>,
     started_at: u64,
@@ -160,6 +170,11 @@ impl App {
         let store = Store::load(config.data_dir.join("state.db"), config.max_history)?;
         let github = GitHub::load(config.data_dir.join("github.json"))?;
         let ecr = Ecr::load(config.data_dir.join("ecr.conf"))?;
+        let auth = Auth::load(
+            config.data_dir.join("auth.conf"),
+            &config.admin_user,
+            &config.admin_password,
+        )?;
         let docker = DockerClient::new(config.docker_binary.clone());
         let git = GitClient::new(config.git_binary.clone());
         let capabilities = Capabilities {
@@ -175,6 +190,7 @@ impl App {
             git,
             github,
             ecr,
+            auth,
             capabilities,
             deploy_lock: Mutex::new(()),
             started_at: now_unix(),
@@ -303,8 +319,17 @@ impl App {
         if !request.path.starts_with("/api/") {
             return json_error(404, "ruta no encontrada");
         }
+        if method == "POST" && request.path == "/api/auth/login" {
+            return self.login(request);
+        }
+        if method == "POST" && request.path == "/api/auth/change-password" {
+            return self.change_password(request);
+        }
         if !self.is_authorized(request) {
-            return Response::json(401, "{\"error\":\"token inválido\"}".to_owned())
+            return Response::json(
+                401,
+                "{\"error\":\"sesión inválida o cambio de contraseña pendiente\"}".to_owned(),
+            )
                 .with_header("WWW-Authenticate", "Bearer");
         }
 
@@ -392,9 +417,70 @@ impl App {
 
     // ── Autenticación ──────────────────────────────────────────────────────
 
+    fn login(&self, request: &Request) -> Response {
+        let fields = match request.form() {
+            Ok(fields) => fields,
+            Err(error) => return json_error(400, &error),
+        };
+        match self.auth.login(
+            &request.client_ip(),
+            field(&fields, "username"),
+            field(&fields, "password"),
+        ) {
+            Ok(session) => Response::json(
+                200,
+                format!(
+                    "{{\"token\":{},\"must_change_password\":{}}}",
+                    json_string(&session.token),
+                    session.must_change,
+                ),
+            ),
+            Err(LoginError::Blocked(blocked)) => {
+                let message = if blocked.day_lock {
+                    "Demasiados intentos fallidos. Acceso bloqueado durante 1 día."
+                } else {
+                    "Usuario o contraseña incorrectos. Intenta de nuevo en 1 minuto."
+                };
+                Response::json(
+                    429,
+                    format!(
+                        "{{\"error\":{},\"retry_after_seconds\":{},\"locked_for_day\":{}}}",
+                        json_string(message),
+                        blocked.retry_after_seconds,
+                        blocked.day_lock,
+                    ),
+                )
+                .with_header("Retry-After", blocked.retry_after_seconds.to_string())
+            }
+            Err(LoginError::Internal(error)) => json_error(500, &error),
+        }
+    }
+
+    fn change_password(&self, request: &Request) -> Response {
+        let Some(token) = bearer_token(request) else {
+            return json_error(401, "la sesión ya no es válida");
+        };
+        let fields = match request.form() {
+            Ok(fields) => fields,
+            Err(error) => return json_error(400, &error),
+        };
+        match self.auth.change_password(token, field(&fields, "password")) {
+            Ok(new_token) => Response::json(
+                200,
+                format!(
+                    "{{\"token\":{},\"must_change_password\":false}}",
+                    json_string(&new_token),
+                ),
+            ),
+            Err(error) if error == "la sesión ya no es válida" => json_error(401, &error),
+            Err(error) => json_error(422, &error),
+        }
+    }
+
     fn is_authorized(&self, request: &Request) -> bool {
-        bearer_token(request)
-            .is_some_and(|token| constant_time_eq(token, &self.config.admin_token))
+        bearer_token(request).is_some_and(|token| {
+            constant_time_eq(token, &self.config.admin_token) || self.auth.authorize(token, false)
+        })
     }
 
     /// URL con la que **el navegador** ve el panel, deducida de la cabecera `Host`.

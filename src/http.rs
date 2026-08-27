@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{IpAddr, TcpStream};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -27,6 +27,7 @@ pub struct Request {
     /// Cuerpo que se guardó en disco en vez de en `body`. Solo lo tienen las
     /// rutas de subida; el handler lo consume y `discard_upload` lo borra.
     pub upload: Option<PathBuf>,
+    peer_ip: String,
 }
 
 impl Request {
@@ -34,6 +35,26 @@ impl Request {
         self.headers
             .get(&name.to_ascii_lowercase())
             .map(String::as_str)
+    }
+
+    /// Solo confiamos en X-Forwarded-For cuando la conexión viene del Nginx
+    /// local; en una conexión remota directa esa cabecera puede falsificarse.
+    pub fn client_ip(&self) -> String {
+        let peer = self.peer_ip.parse::<IpAddr>().ok();
+        if peer.is_some_and(|address| address.is_loopback()) {
+            if let Some(forwarded) = self
+                .header("x-forwarded-for")
+                // El proxy local agrega la IP real al final. Tomar el último
+                // elemento evita que una cabecera enviada por el cliente eluda
+                // el limitador mediante una IP falsa al principio de la lista.
+                .and_then(|value| value.split(',').next_back())
+                .map(str::trim)
+                .filter(|value| value.parse::<IpAddr>().is_ok())
+            {
+                return forwarded.to_owned();
+            }
+        }
+        self.peer_ip.clone()
     }
 
     /// Borra el temporal de la subida. Se llama siempre al cerrar la conexión,
@@ -261,6 +282,10 @@ fn safe_filename(value: &str) -> String {
 }
 
 pub fn read_request(stream: &mut TcpStream) -> Result<Request, HttpReadError> {
+    let peer_ip = stream
+        .peer_addr()
+        .map(|address| address.ip().to_string())
+        .unwrap_or_else(|_| "unknown".to_owned());
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(HttpReadError::Io)?;
@@ -387,6 +412,7 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, HttpReadError> {
         headers,
         body,
         upload,
+        peer_ip,
     })
 }
 
@@ -517,5 +543,27 @@ mod tests {
         assert_eq!(safe_filename("../etc/passwd"), ".._etc_passwd");
         assert_eq!(safe_filename("a\"\r\nb"), "a___b");
         assert_eq!(safe_filename(""), "descarga");
+    }
+
+    #[test]
+    fn forwarded_ip_is_only_trusted_from_loopback_and_uses_the_last_hop() {
+        let request = |peer_ip: &str, forwarded: &str| Request {
+            method: "GET".to_owned(),
+            path: "/".to_owned(),
+            query: HashMap::new(),
+            headers: HashMap::from([("x-forwarded-for".to_owned(), forwarded.to_owned())]),
+            body: Vec::new(),
+            upload: None,
+            peer_ip: peer_ip.to_owned(),
+        };
+
+        assert_eq!(
+            request("127.0.0.1", "198.51.100.7, 203.0.113.9").client_ip(),
+            "203.0.113.9"
+        );
+        assert_eq!(
+            request("203.0.113.10", "198.51.100.7").client_ip(),
+            "203.0.113.10"
+        );
     }
 }

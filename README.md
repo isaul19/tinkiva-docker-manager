@@ -511,6 +511,21 @@ tmanager start
 
 En el primer inicio aparecerá el asistente de configuración.
 
+El asistente crea un usuario inicial (`admin`, salvo que se configure otro) y una contraseña
+aleatoria. El primer inicio de sesión obliga a sustituirla. En instalaciones automatizadas se
+pueden definir antes de arrancar el servicio:
+
+```env
+TDM_ADMIN_USER=admin
+TDM_ADMIN_PASSWORD=una-contraseña-inicial-de-al-menos-12-caracteres
+```
+
+La contraseña inicial solo se usa para crear `<TDM_DATA_DIR>/auth.conf`; ese archivo guarda un
+hash Argon2, nunca la contraseña. Un error de usuario o contraseña bloquea nuevos intentos desde
+la misma IP durante un minuto. Tres errores consecutivos amplían el bloqueo a un día. Para
+publicar el panel bajo `/plataform/`, usa el ejemplo de Nginx incluido en
+`deploy/nginx.example.conf` y sirve siempre mediante HTTPS.
+
 ---
 
 # CLI

@@ -10,6 +10,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BINARY=${1:-"$ROOT/target/release/tmanager"}
 BIND=${TDM_INSTALL_BIND:-127.0.0.1:8787}
 USER_NAME=tinkiva-docker
+ADMIN_USER=${TDM_INSTALL_ADMIN_USER:-admin}
 
 [[ -x "$BINARY" ]] || { echo "No existe un binario ejecutable en $BINARY" >&2; exit 1; }
 command -v docker >/dev/null || { echo "Docker no está instalado." >&2; exit 1; }
@@ -35,9 +36,12 @@ install -m 0644 -o root -g root "$ROOT/README.md" /usr/local/share/doc/tinkiva-d
 
 if [[ ! -f /etc/tinkiva-docker-manager/env ]]; then
   TOKEN=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
+  ADMIN_PASSWORD=${TDM_INSTALL_ADMIN_PASSWORD:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}
   cat > /etc/tinkiva-docker-manager/env <<EOF
 TDM_BIND=$BIND
 TDM_ADMIN_TOKEN=$TOKEN
+TDM_ADMIN_USER=$ADMIN_USER
+TDM_ADMIN_PASSWORD=$ADMIN_PASSWORD
 TDM_DATA_DIR=/var/lib/tinkiva-docker-manager
 TDM_ALLOWED_ROOT=/opt/tinkiva/apps
 TDM_DOCKER_BIN=/usr/bin/docker
@@ -47,6 +51,8 @@ EOF
   chmod 0600 /etc/tinkiva-docker-manager/env
 else
   TOKEN=$(sed -n 's/^TDM_ADMIN_TOKEN=//p' /etc/tinkiva-docker-manager/env | head -n1)
+  ADMIN_USER=$(sed -n 's/^TDM_ADMIN_USER=//p' /etc/tinkiva-docker-manager/env | head -n1)
+  ADMIN_PASSWORD=$(sed -n 's/^TDM_ADMIN_PASSWORD=//p' /etc/tinkiva-docker-manager/env | head -n1)
 fi
 
 systemctl daemon-reload
@@ -58,12 +64,15 @@ cat <<EOF
 
 Instalación completada.
 Panel local: http://$BIND
-Token administrador: $TOKEN
+Usuario inicial: ${ADMIN_USER:-admin}
+Contraseña inicial: ${ADMIN_PASSWORD:-usa el token administrador existente}
+El primer acceso obliga a cambiar la contraseña.
+Token para automatizaciones: $TOKEN
 
 Acceso seguro sin publicar el puerto:
   ssh -L 8787:127.0.0.1:8787 USUARIO@SERVIDOR
   abre http://127.0.0.1:8787
 
-El token también quedó en /etc/tinkiva-docker-manager/env (modo 0600).
+Las credenciales iniciales y el token quedaron en /etc/tinkiva-docker-manager/env (modo 0600).
 Para GitHub Actions necesitas publicar el endpoint por HTTPS; revisa deploy/nginx.example.conf.
 EOF

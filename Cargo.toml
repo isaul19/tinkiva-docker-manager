@@ -1,6 +1,6 @@
 [package]
 name = "tinkiva-docker-manager"
-version = "0.13.0"
+version = "0.14.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Panel de despliegue Docker ultraligero y de un solo nodo"
@@ -11,8 +11,8 @@ authors = ["Tinkiva"]
 name = "tmanager"
 path = "src/main.rs"
 
-# Intencionalmente sin dependencias externas: menor RAM, binario pequeño y build reproducible.
 [dependencies]
+argon2 = { version = "0.5.3", default-features = false, features = ["alloc", "password-hash"] }
 
 [profile.release]
 opt-level = "z"

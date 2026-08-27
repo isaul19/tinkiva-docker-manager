@@ -65,6 +65,12 @@ Las credenciales de la GitHub App viven aparte, en `<TDM_DATA_DIR>/github.json` 
 permisos `0600`. El endpoint de estado nunca las devuelve: hay una prueba que comprueba que
 ni la clave privada ni los secretos aparecen en la respuesta.
 
+Las credenciales del panel viven en `<TDM_DATA_DIR>/auth.conf`, también con permisos `0600`.
+La contraseña se deriva con Argon2 y una sal aleatoria; el navegador conserva solamente un
+token de sesión opaco. El primer acceso debe reemplazar la contraseña inicial. Los fallos se
+limitan por IP: un minuto después de cada fallo y un día después del tercero consecutivo. Los
+bloqueos sobreviven reinicios en `<TDM_DATA_DIR>/auth.attempts.conf`.
+
 ## Docker y git
 
 El proceso invoca los CLI con argumentos separados, nunca mediante `sh -c`. Las entradas se

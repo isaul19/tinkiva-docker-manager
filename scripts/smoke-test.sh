@@ -9,6 +9,8 @@ fi
 BINARY=$(realpath "$BINARY")
 TMP=$(mktemp -d)
 TOKEN='0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+ADMIN_USER='admin'
+ADMIN_PASSWORD='initial-password-123'
 PORT=$(python3 - <<'PY'
 import socket
 s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()
@@ -32,6 +34,8 @@ printf 'APP_IMAGE=ghcr.io/example/app:zero\n' > "$TMP/apps/demo/.env"
 
 TDM_BIND="127.0.0.1:$PORT" \
 TDM_ADMIN_TOKEN="$TOKEN" \
+TDM_ADMIN_USER="$ADMIN_USER" \
+TDM_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
 TDM_DATA_DIR="$TMP/data" \
 TDM_ALLOWED_ROOT="$TMP/apps" \
 TDM_DOCKER_BIN="$ROOT/tests/mock-docker.sh" \
@@ -53,6 +57,23 @@ curl -fsS "$BASE/healthz" | jq -e '.ok == true' >/dev/null
 
 AUTH=(-H "Authorization: Bearer $TOKEN")
 FORM=(-H 'Content-Type: application/x-www-form-urlencoded')
+
+LOGIN_JSON=$(curl -fsS "${FORM[@]}" -X POST "$BASE/api/auth/login" \
+  --data-urlencode "username=$ADMIN_USER" \
+  --data-urlencode "password=$ADMIN_PASSWORD")
+echo "$LOGIN_JSON" | jq -e '.must_change_password == true' >/dev/null
+INITIAL_SESSION=$(echo "$LOGIN_JSON" | jq -r '.token')
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer $INITIAL_SESSION" "$BASE/api/info")" == '401' ]]
+
+SESSION_JSON=$(curl -fsS "${FORM[@]}" -H "Authorization: Bearer $INITIAL_SESSION" \
+  -X POST "$BASE/api/auth/change-password" \
+  --data-urlencode 'password=replacement-password-456')
+echo "$SESSION_JSON" | jq -e '.must_change_password == false' >/dev/null
+SESSION_TOKEN=$(echo "$SESSION_JSON" | jq -r '.token')
+curl -fsS -H "Authorization: Bearer $SESSION_TOKEN" "$BASE/api/info" \
+  | jq -e '.docker.available == true' >/dev/null
+
 curl -fsS "${AUTH[@]}" "$BASE/api/info" | jq -e '.docker.available == true' >/dev/null
 curl -fsS "${AUTH[@]}" "$BASE/api/system" | jq -e '.process_rss >= 0' >/dev/null
 curl -fsS "${AUTH[@]}" "$BASE/api/containers" | jq -e 'length == 2' >/dev/null

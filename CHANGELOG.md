@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.14.0 — 2026-08-27
+
+### Acceso seguro al panel
+
+- El panel reemplaza el token visible por un inicio de sesión con usuario y contraseña. La
+  contraseña se almacena como hash Argon2 con sal aleatoria y el navegador conserva solamente
+  una sesión opaca de doce horas.
+- El primer acceso obliga a cambiar la contraseña inicial configurada mediante
+  `TDM_ADMIN_USER` y `TDM_ADMIN_PASSWORD`. Las instalaciones anteriores pueden usar
+  `TDM_ADMIN_TOKEN` una sola vez como contraseña inicial; el token continúa disponible para
+  automatizaciones.
+- Cada credencial incorrecta bloquea durante un minuto los nuevos intentos desde la misma IP.
+  Tres errores consecutivos amplían el bloqueo a un día. El estado se guarda atómicamente y
+  sobrevive reinicios; el frontend muestra tanto el motivo como el tiempo restante.
+- Los assets y las llamadas API usan rutas relativas, por lo que el manager puede publicarse
+  bajo `/plataform/`. El ejemplo de Nginx elimina el prefijo y transmite una IP no falsificable
+  al limitador.
+
 ## 0.13.0 — 2026-08-19
 
 ### Importación de SQL

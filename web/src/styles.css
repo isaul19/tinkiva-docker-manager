@@ -184,6 +184,27 @@ code {
   text-align: center;
 }
 
+.login-error,
+.login-lock {
+  margin: 0;
+  padding: 0.8rem 0.9rem;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.login-error {
+  color: #ffb4b4;
+  background: rgba(185, 28, 28, 0.18);
+  border: 1px solid rgba(248, 113, 113, 0.28);
+}
+
+.login-lock {
+  color: #fde68a;
+  background: rgba(180, 83, 9, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
 .brand-mark {
   width: 52px;
   height: 52px;
