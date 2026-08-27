@@ -164,20 +164,3 @@ impl Deployment {
         )
     }
 }
-
-#[derive(Clone, Debug)]
-pub struct PersistedState {
-    pub next_deployment_id: u64,
-    pub projects: Vec<Project>,
-    pub deployments: Vec<Deployment>,
-}
-
-impl Default for PersistedState {
-    fn default() -> Self {
-        Self {
-            next_deployment_id: 1,
-            projects: Vec::new(),
-            deployments: Vec::new(),
-        }
-    }
-}

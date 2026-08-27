@@ -40,6 +40,7 @@ pub struct Config {
     pub admin_user: String,
     pub admin_password: String,
     pub data_dir: PathBuf,
+    pub sqlite_path: PathBuf,
     pub allowed_root: PathBuf,
     pub docker_binary: PathBuf,
     pub git_binary: PathBuf,
@@ -75,6 +76,11 @@ impl Config {
         // Compatibilidad: en instalaciones existentes el token es la contraseña
         // inicial. El primer acceso obliga a sustituirla y solo se guarda su hash.
         let admin_password = setting("TDM_ADMIN_PASSWORD").unwrap_or_else(|| admin_token.clone());
+        let store = setting("TDM_STORE").unwrap_or_else(|| "sqlite".to_owned());
+        if store != "sqlite" {
+            return Err("TDM_STORE solo admite 'sqlite' desde v0.15.0".to_owned());
+        }
+        let configured_sqlite_path = setting("TDM_SQLITE_PATH").map(PathBuf::from);
 
         let data_dir = PathBuf::from(
             setting("TDM_DATA_DIR")
@@ -96,6 +102,10 @@ impl Config {
         let data_dir = data_dir
             .canonicalize()
             .map_err(|error| format!("no se pudo resolver {}: {error}", data_dir.display()))?;
+        let sqlite_path = configured_sqlite_path.map_or_else(
+            || data_dir.join("tinkiva.sqlite3"),
+            |path| if path.is_absolute() { path } else { data_dir.join(path) },
+        );
 
         let workers = setting("TDM_WORKERS")
             .and_then(|value| value.parse::<usize>().ok())
@@ -121,6 +131,7 @@ impl Config {
             admin_user,
             admin_password,
             data_dir,
+            sqlite_path,
             allowed_root,
             docker_binary: PathBuf::from(
                 setting("TDM_DOCKER_BIN").unwrap_or_else(|| "docker".to_owned()),
@@ -167,7 +178,7 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config) -> Result<Self, String> {
-        let store = Store::load(config.data_dir.join("state.db"), config.max_history)?;
+        let store = Store::load(config.sqlite_path.clone(), config.max_history)?;
         let github = GitHub::load(config.data_dir.join("github.json"))?;
         let ecr = Ecr::load(config.data_dir.join("ecr.conf"))?;
         let auth = Auth::load(

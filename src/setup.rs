@@ -223,6 +223,10 @@ pub fn run_wizard(current: Option<&HashMap<String, String>>) -> Result<(), Strin
         "Directorio de datos (estado local)",
         &default_data_dir,
     )?;
+    let sqlite_path = current
+        .and_then(|settings| settings.get("TDM_SQLITE_PATH"))
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from(&data_dir).join("tinkiva.sqlite3").display().to_string());
     let default_allowed_root = current
         .and_then(|settings| settings.get("TDM_ALLOWED_ROOT"))
         .cloned()
@@ -249,10 +253,12 @@ pub fn run_wizard(current: Option<&HashMap<String, String>>) -> Result<(), Strin
             "TDM_ADMIN_TOKEN={}\n",
             "TDM_ADMIN_USER={}\n",
             "TDM_ADMIN_PASSWORD={}\n",
+            "TDM_STORE=sqlite\n",
+            "TDM_SQLITE_PATH={}\n",
             "TDM_DATA_DIR={}\n",
             "TDM_ALLOWED_ROOT={}\n"
         ),
-        bind, admin_token, admin_user, admin_password, data_dir, allowed_root
+        bind, admin_token, admin_user, admin_password, sqlite_path, data_dir, allowed_root
     );
     atomic_write(&path, contents.as_bytes(), 0o600)
         .map_err(|error| format!("no se pudo escribir {}: {error}", path.display()))?;
@@ -261,6 +267,7 @@ pub fn run_wizard(current: Option<&HashMap<String, String>>) -> Result<(), Strin
     println!("  ✔ Configuración guardada en {} (permisos 0600)", path.display());
     println!("  ✔ Panel:            http://{bind}");
     println!("  ✔ Datos:            {data_dir}");
+    println!("  ✔ SQLite:          {sqlite_path}");
     println!("  ✔ Apps Compose:     {allowed_root}");
     println!("  ✔ Usuario inicial: {admin_user}");
     if current_password.is_none() {

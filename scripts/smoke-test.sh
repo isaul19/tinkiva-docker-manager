@@ -36,6 +36,8 @@ TDM_BIND="127.0.0.1:$PORT" \
 TDM_ADMIN_TOKEN="$TOKEN" \
 TDM_ADMIN_USER="$ADMIN_USER" \
 TDM_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+TDM_STORE=sqlite \
+TDM_SQLITE_PATH="$TMP/data/tinkiva.sqlite3" \
 TDM_DATA_DIR="$TMP/data" \
 TDM_ALLOWED_ROOT="$TMP/apps" \
 TDM_DOCKER_BIN="$ROOT/tests/mock-docker.sh" \
@@ -53,6 +55,8 @@ for _ in $(seq 1 80); do
   sleep .1
 done
 curl -fsS "$BASE/healthz" | jq -e '.ok == true' >/dev/null
+[[ -f "$TMP/data/tinkiva.sqlite3" ]]
+[[ "$(head -c 15 "$TMP/data/tinkiva.sqlite3")" == 'SQLite format 3' ]]
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/info")" == '401' ]]
 
 AUTH=(-H "Authorization: Bearer $TOKEN")

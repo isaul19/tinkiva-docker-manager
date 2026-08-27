@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.15.0 — 2026-08-27
+
+### Estado interno en SQLite
+
+- Proyectos e historial de despliegues viven ahora en SQLite real, enlazado estáticamente en el
+  binario. No hace falta instalar ni operar un servidor de base de datos adicional.
+- `TDM_STORE=sqlite` selecciona el único backend disponible y `TDM_SQLITE_PATH` configura la
+  ruta, que por defecto es `<TDM_DATA_DIR>/tinkiva.sqlite3`.
+- El esquema usa transacciones, ids autoincrementales, restricciones de unicidad, índices para
+  el historial, `journal_mode=WAL`, `synchronous=FULL`, `busy_timeout`, permisos `0600`,
+  `user_version` y una verificación de integridad al arrancar.
+- La inserción de cada despliegue y la retención `TDM_MAX_HISTORY` suceden dentro de la misma
+  transacción. Paginación, filtros, rollback y conteos se resuelven directamente en SQL.
+- Cambio incompatible intencional: el archivo textual `state.db` de TDM3 no se importa. Queda
+  intacto y la nueva base usa otra ruta; apuntar SQLite al archivo antiguo detiene el arranque
+  antes de sobrescribirlo.
+- El workflow de release instala las herramientas MUSL necesarias para compilar SQLite dentro de
+  los binarios estáticos `amd64` y `arm64`.
+
 ## 0.14.0 — 2026-08-27
 
 ### Acceso seguro al panel

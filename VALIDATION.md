@@ -36,7 +36,8 @@ Todas se ejecutaron sobre Linux x86_64 con Rust 1.97.1 y Node 22.
 - Rutas relativas que no pueden escapar del clon y rutas de volumen absolutas.
 - Archivo de credenciales de git con permisos `0600` y borrado garantizado al salir de
   ámbito; redacción de tokens en los mensajes de error.
-- Lectura del formato de estado `TDM1` anterior y reescritura como `TDM2`.
+- Persistencia SQLite de proyectos y despliegues, reapertura, paginación, filtros, retención,
+  actualizaciones y rechazo seguro de un archivo TDM antiguo.
 - Lanzador de subprocesos: captura de salida, código de salida y muerte por timeout.
 
 ### Qué cubre el smoke test

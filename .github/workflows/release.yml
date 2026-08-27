@@ -30,6 +30,8 @@ jobs:
 
       - name: Install Rust
         run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
           rustup toolchain install 1.97.1 --profile minimal
           rustup default 1.97.1
           rustup target add ${{ matrix.target }}

@@ -13,7 +13,8 @@ Tinkiva Docker Manager es una herramienta administrativa de un solo host. El pro
 - Restricción opcional por rama.
 - Validaciones conservadoras para slug, rama, referencia de imagen, contenedor y variables de entorno.
 - Rutas canónicas confinadas a `TDM_ALLOWED_ROOT`.
-- Escritura atómica del estado y archivos `.env` con permisos restrictivos.
+- Escritura atómica de credenciales y archivos `.env` con permisos restrictivos.
+- Estado SQLite `0600`, transacciones, WAL, sincronización completa y esquema versionado.
 - Límite de 32 KiB para cabeceras y 512 KiB para cuerpos HTTP.
 - Límite de 2 MiB para logs devueltos.
 - Pool fijo de workers y un único deployment simultáneo.

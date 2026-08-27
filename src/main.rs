@@ -156,12 +156,13 @@ fn serve(config: Config) -> Result<(), String> {
         .map_err(|error| format!("no se pudo iniciar el watcher: {error}"))?;
 
     eprintln!(
-        "Tinkiva Docker Manager {} escuchando en {} con {} workers; polling cada {}s; raíz permitida: {}",
+        "Tinkiva Docker Manager {} escuchando en {} con {} workers; polling cada {}s; raíz permitida: {}; SQLite: {}",
         env!("CARGO_PKG_VERSION"),
         bind,
         workers,
         poll_interval,
-        app.config().allowed_root.display()
+        app.config().allowed_root.display(),
+        app.config().sqlite_path.display()
     );
 
     for incoming in listener.incoming() {

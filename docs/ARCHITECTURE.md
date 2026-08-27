@@ -47,19 +47,19 @@ verificables contra los vectores de prueba de FIPS 180-4 y RFC 4231.
 
 ## Persistencia
 
-`state.db` es un formato de líneas `TDM3`, no una base de datos. Cada campo textual se codifica por porcentaje, y cada modificación reescribe el archivo mediante:
+El estado vive en SQLite, de forma predeterminada en
+`<TDM_DATA_DIR>/tinkiva.sqlite3`. El binario enlaza SQLite estáticamente: no necesita instalar
+un servidor ni una biblioteca del sistema. La conexión usa transacciones, `journal_mode=WAL`,
+`synchronous=FULL`, espera acotada ante bloqueos y esquema versionado mediante `user_version`.
+El archivo se protege con permisos `0600`.
 
-1. Archivo temporal `0600` en el mismo directorio.
-2. `write_all`.
-3. `sync_all`.
-4. `rename` atómico.
-5. Sincronización del directorio cuando es posible.
+`projects` mantiene unicidad tanto por slug como por ruta Compose. `deployments` usa ids
+autoincrementales e índice por proyecto; la retención `TDM_MAX_HISTORY` se aplica dentro de la
+misma transacción que inserta un despliegue.
 
-El historial está acotado por `TDM_MAX_HISTORY`.
-
-El formato anterior `TDM1` se sigue leyendo: a las líneas de proyecto les faltan los cuatro
-campos de tipo y origen, que se rellenan como proyecto Compose sin repositorio. El archivo
-queda reescrito en `TDM3` en el primer guardado. TDM3 añade el indicador `auto_deploy`.
+Las versiones anteriores usaban `state.db` en formato textual TDM3. No se importa
+automáticamente: el archivo antiguo queda intacto y SQLite usa `tinkiva.sqlite3`. Si se apunta
+`TDM_SQLITE_PATH` por error al archivo TDM, el arranque se detiene antes de sobrescribirlo.
 
 Las credenciales de la GitHub App viven aparte, en `<TDM_DATA_DIR>/github.json` con
 permisos `0600`. El endpoint de estado nunca las devuelve: hay una prueba que comprueba que

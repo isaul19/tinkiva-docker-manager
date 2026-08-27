@@ -2,8 +2,8 @@
 
 ### Un panel Docker ultraligero para servidores pequeños.
 
-**Un único binario Rust. Sin Node.js en producción. Sin Redis. Sin PostgreSQL. Sin SQLite. Sin
-agentes adicionales.**
+**Un único binario Rust. Sin Node.js en producción. Sin Redis ni PostgreSQL para el panel. SQLite
+va embebido en el propio binario. Sin agentes adicionales.**
 
 > **≈ 0.7–1.2 MB de memoria privada del proceso**
 >
@@ -55,7 +55,6 @@ No necesita mantener permanentemente:
 - Node.js
 - PostgreSQL
 - MySQL
-- SQLite
 - Redis
 - Prometheus
 - Grafana
@@ -74,7 +73,7 @@ En reposo, el proceso utiliza aproximadamente:
 | ---------------------- | ---------------: |
 | Memoria privada típica | **≈ 0.7–1.2 MB** |
 | RSS observado en Linux |         ≈ 2–3 MB |
-| Binario release        |         ≈ 943 KB |
+| Binario release        |         ≈ 2.1 MB |
 | Frontend compilado     |         ≈ 155 KB |
 | Frontend gzip          |          ≈ 53 KB |
 
@@ -357,29 +356,25 @@ No permanecen residentes después de terminar la operación.
 
 ---
 
-# Sin base de datos para el panel
+# Estado local en SQLite
 
-Tinkiva no necesita PostgreSQL, Redis ni SQLite para almacenar su propio estado.
+Tinkiva no necesita un servidor de base de datos externo para almacenar su propio estado.
+SQLite está compilado dentro del binario y guarda proyectos e historial en:
 
-Utiliza un formato local ligero llamado **TDM3**.
-
-```text
-state.db
+```env
+TDM_STORE=sqlite
+TDM_SQLITE_PATH=/var/lib/tinkiva-docker-manager/tinkiva.sqlite3
 ```
 
-Las escrituras se realizan de forma atómica mediante:
+La base usa transacciones, journal WAL, sincronización completa y permisos `0600`. El historial
+tiene un tamaño máximo configurable para evitar crecimiento indefinido:
 
-```text
-temporary file
-      ↓
-write
-      ↓
-sync
-      ↓
-atomic rename
+```env
+TDM_MAX_HISTORY=200
 ```
 
-El historial tiene un tamaño máximo configurable para evitar crecimiento indefinido.
+Las versiones anteriores usaban un archivo de texto `state.db` con formato TDM3. `v0.15.0` no
+lo importa automáticamente: se conserva intacto y la base SQLite se crea en una ruta distinta.
 
 ---
 
